@@ -628,8 +628,8 @@ and a single split cannot settle a 0.005 difference.
 | **+ popularity and crowd-relative blocks** | **479** | **0.8894** | **0.9510** | **0.8363** | **0.8836** | **0.8827** |
 | shipped, bagged over 10 seeds | 479 | 0.8911 | — | — | — | — |
 
-`submission.csv` md5 `ffb2ec0bfa42d1c1256bdcb5d149132a`, archived as
-`docs/submissions/s03_479f_popularity_pct`.
+`submission.csv` md5 `ffb2ec0bfa42d1c1256bdcb5d149132a`.
+
 
 ### F42 — what can still be said about the hidden test, without its labels
 Three readings, all on the shipped 479-column set.
