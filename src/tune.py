@@ -56,10 +56,22 @@ def main() -> None:
     parser.add_argument("--trials", type=int, default=25)
     parser.add_argument("--folds", type=int, default=3)
     parser.add_argument("--max-rounds", type=int, default=900)
+    parser.add_argument(
+        "--temporal",
+        type=float,
+        default=0.5,
+        help="share of the objective taken from forward-chaining rather than random CV",
+    )
     args = parser.parse_args()
 
     dataset = build_dataset()
     x, y = dataset.x_train, dataset.y_train
+    day = dataset.day_index
+    # Random CV rewards low regularisation that does not survive the move to later
+    # days, so half the objective is earned on splits that only look forward.
+    chain_splits = [
+        (np.flatnonzero(day < cut), np.flatnonzero(day >= cut)) for cut in (7, 9, 11)
+    ]
     folds = list(StratifiedKFold(args.folds, shuffle=True, random_state=config.SEED).split(x, y))
 
     def objective(trial: optuna.Trial) -> float:
@@ -80,7 +92,20 @@ def main() -> None:
                 spec, x.iloc[train_idx], y.iloc[train_idx], x.iloc[valid_idx]
             )
         trial.set_user_attr("rounds", rounds)
-        return float(average_precision_score(y, oof))
+        random_score = float(average_precision_score(y, oof))
+        if not args.temporal:
+            return random_score
+        chain = [
+            average_precision_score(
+                y.iloc[valid_idx],
+                fit_predict(spec, x.iloc[train_idx], y.iloc[train_idx], x.iloc[valid_idx]),
+            )
+            for train_idx, valid_idx in chain_splits
+        ]
+        chain_score = float(np.mean(chain))
+        trial.set_user_attr("random_pr_auc", random_score)
+        trial.set_user_attr("chain_pr_auc", chain_score)
+        return (1 - args.temporal) * random_score + args.temporal * chain_score
 
     optuna.logging.set_verbosity(optuna.logging.WARNING)
     study = optuna.create_study(
@@ -99,7 +124,13 @@ def main() -> None:
 
     study.optimize(objective, n_trials=args.trials, show_progress_bar=False, callbacks=[log_trial])
 
-    best = {"params": study.best_params, "rounds": study.best_trial.user_attrs["rounds"], "pr_auc": study.best_value}
+    best = {
+        "params": study.best_params,
+        "rounds": study.best_trial.user_attrs["rounds"],
+        "pr_auc": study.best_value,
+        "random_pr_auc": study.best_trial.user_attrs.get("random_pr_auc"),
+        "chain_pr_auc": study.best_trial.user_attrs.get("chain_pr_auc"),
+    }
     path = config.ROOT / f"params_{args.kind}.json"
     path.write_text(json.dumps(best, indent=2))
     print(f"{args.kind}: PR-AUC {study.best_value:.4f} rounds {best['rounds']}")
