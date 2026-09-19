@@ -1,8 +1,7 @@
-# Bot detection challenge — solution
+# Bot detection
 
 Scores each `cookie_id` in `data/test.csv` between 0 and 1 for belonging to
-automated data-collection traffic. Metric: precision at recall >= 0.70, computed with
-the organisers' own `metric.py`.
+automated data-collection traffic. Metric: precision at recall >= 0.70, computed with `metric.py`.
 
 ## Running it
 

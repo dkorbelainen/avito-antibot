@@ -70,7 +70,11 @@ def main() -> None:
     study = optuna.create_study(
         direction="maximize", sampler=optuna.samplers.TPESampler(seed=config.SEED)
     )
-    study.optimize(objective, n_trials=args.trials, show_progress_bar=False)
+
+    def log_trial(study: optuna.Study, trial: optuna.trial.FrozenTrial) -> None:
+        print(f"trial {trial.number:3d} pr_auc {trial.value:.4f} best {study.best_value:.4f}", flush=True)
+
+    study.optimize(objective, n_trials=args.trials, show_progress_bar=False, callbacks=[log_trial])
 
     best = {"params": study.best_params, "rounds": study.best_trial.user_attrs["rounds"], "pr_auc": study.best_value}
     path = config.ROOT / f"params_{args.kind}.json"

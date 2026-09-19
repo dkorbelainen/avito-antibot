@@ -45,6 +45,7 @@ def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--kinds", default="lgb,cat,xgb")
     parser.add_argument("--seeds", type=int, default=config.N_SEEDS)
+    parser.add_argument("--bag", type=int, default=10, help="seeds averaged for the shipped test scores")
     parser.add_argument("--name", default="final")
     args = parser.parse_args()
 
@@ -71,7 +72,7 @@ def main() -> None:
     for kind, spec in specs.items():
         bagged = [
             fit_predict(spec, x, y, x_test, seed=config.SEED + offset)
-            for offset in range(args.seeds)
+            for offset in range(args.bag)
         ]
         test_predictions.append(rank_average(bagged))
     scores = rank_average(test_predictions, [weights[k] for k in kinds])

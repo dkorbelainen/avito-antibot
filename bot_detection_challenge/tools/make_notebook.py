@@ -395,15 +395,15 @@ md(r"""
 """)
 
 code(r"""
-TRACK = [
-    "B0_baseline_simple",
-    "A_full_lgb",
-    "A3_pointer_deep_lgb",
-    "A4_relative_scoped",
-    "A5_core",
-    "final_blend",
-]
-timeline = report.table(TRACK)
+TRACK = {
+    "B0_baseline_simple": "baseline, 47 признаков",
+    "ablation_full": "ядро A, 178",
+    "A3_pointer_deep_lgb": "+ геометрия курсора, 353",
+    "A4_relative_scoped": "+ ранги дня (отвергнут), 457",
+    "A5_core": "рабочий набор, 423",
+    "final_blend": "бленд трёх моделей",
+}
+timeline = report.table(list(TRACK)).assign(шаг=lambda f: f.experiment.map(TRACK))
 plots.progression(timeline.dropna(subset=["P@R70"]))
 timeline
 """)
@@ -417,11 +417,12 @@ score линейно растягивается в [0, 1] — метрика ч�
 """)
 
 code(r"""
+BAG = 10  # усреднение по сидам только для боевых предсказаний, валидация идёт на 5
 test_predictions = []
 for kind, spec in specs.items():
     bagged = [
         fit_predict(spec, x, y, dataset.x_test, seed=config.SEED + offset)
-        for offset in range(config.N_SEEDS)
+        for offset in range(BAG)
     ]
     test_predictions.append(rank_average(bagged))
 
