@@ -11,16 +11,27 @@ from .model import ModelSpec, estimate_rounds
 from .pipeline import build_dataset
 
 BLOCKS: dict[str, str] = {
+    "popularity": r"^pop_",
+    "crowd_relative": r"^crowd_",
     "volume_mix": r"^(n_events|cnt_|rate_|ratio_|n_active_hours|events_per_active_hour|hour_entropy|night_rate)",
     "transitions": r"^(bg_|n_bigrams_uniq|bigram_entropy|self_loop_rate)",
     "timing": r"^(dt_|span_h|events_per_h)",
+    "dt_granularity": r"^dtg_",
     "sessions": r"^(sess_|n_sessions)",
-    "content": r"^(item_|search_query_|seller_)",
+    "content": r"^(item_|search_query_|seller_|locations_per_category|items_per_category)",
     "pagination": r"^(page_|queries_nuniq|pages_per_query|query_repeat_rate|query_len_mean)",
     "pointer": r"^(ptr_|pointer_coverage)",
-    "client": r"^(plat_|n_platforms|platform_entropy|n_user_agents|ua|uafam_)",
+    "pointer_deep": r"^ptrd_",
+    "client": r"^(plat_|n_platforms|platform_entropy|n_user_agents|ua_|uafam_|dominant_platform)",
+    "catalog_shares": r"^(shloc_|shcat_|shq_)",
+    "id_structure": r"^idst_",
+    "dwell": r"^dwell_",
+    "navigation": r"^(nav_|funnel_|swipe_run_max|item_revisit_max)",
+    "platform_scoped": r"^(mob_|web_|webp_)",
+    "timeseries": r"^(b1m_|b5m_|b30m_|cmp_|tod_|gap_)",
+    "peer_rank": r"^rel_plat_",
     "window": r"^(first_event_offset_h|last_event_offset_h|window_coverage)",
-    "cookie_meta": r"^(cookie_|window_dow|window_day_index)",
+    "cookie_meta": r"^(cookie_|window_dow)",
     "sequence_svd": r"^(seqo_|seqp_)",
 }
 

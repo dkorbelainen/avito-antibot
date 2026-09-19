@@ -16,6 +16,7 @@ COLUMNS = {
     "roc_auc_mean": "ROC-AUC",
     "pr_auc_mean": "PR-AUC",
     "recall_at_fpr1_mean": "R@FPR1%",
+    "blend_p_at_r70": "P@R70 сиды",
     "fc_p_at_r70_mean": "fc P@R70",
 }
 
