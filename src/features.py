@@ -449,40 +449,56 @@ def _block_catalog_shares(
     return pd.concat(parts, axis=1)
 
 
-def _block_popularity(
-    events: pd.DataFrame, fit_ids: pd.Index | None = None
-) -> pd.DataFrame:
-    """How crowded are the listings this cookie opens?
+def _block_popularity(events: pd.DataFrame, pool: pd.Series) -> pd.DataFrame:
+    """How crowded are the listings this cookie opens, relative to its own pool.
 
-    A listing's audience is counted over the fitting cookies only, and the cookie's own
-    contribution is removed, so the number describes everyone else's interest in the
-    same listing. Collectors concentrate on listings the crowd also opens; a person
-    keeps running into listings nobody else in the window touched.
+    `pool` labels the group of cookies a cookie is observed alongside — the training
+    population for a training cookie, the scored batch for a test cookie. The audience
+    of a listing is counted inside the cookie's own pool with the cookie's own
+    contribution removed, and is then expressed as a percentile of that pool's audience
+    distribution.
+
+    Both halves of that sentence are load-bearing. Counting inside one fixed pool makes
+    the statistic asymmetric — a training cookie is compared with its contemporaries and
+    a test cookie is not — and the raw count is not comparable between pools of
+    different size and duration anyway. The percentile is scale-free, so a listing in
+    the busiest tenth of its own pool reads the same on both sides.
     """
     index = events["cookie_id"].drop_duplicates().sort_values()
     items = events.dropna(subset=["item_id"])
     if items.empty:
         return pd.DataFrame(index=index)
-    fit_rows = items if fit_ids is None else items[items["cookie_id"].isin(fit_ids)]
-    views = fit_rows.groupby("item_id").size()
-    audience = fit_rows.groupby("item_id")["cookie_id"].nunique()
 
-    pairs = items.groupby(["cookie_id", "item_id"]).size().rename("own").reset_index()
-    in_fit = pairs["cookie_id"].isin(fit_rows["cookie_id"].unique()).to_numpy()
-    pairs["views_other"] = pairs["item_id"].map(views) - np.where(in_fit, pairs["own"], 0)
-    pairs["aud_other"] = pairs["item_id"].map(audience) - in_fit
-    # An item absent from the reference is unmeasured, not unpopular.
-    known = pairs.dropna(subset=["aud_other"])
-    g = known.groupby("cookie_id")
+    labels = pool.reindex(items["cookie_id"].to_numpy()).to_numpy()
+    pairs = (
+        items.assign(pool=labels)
+        .groupby(["pool", "cookie_id", "item_id"], observed=True)
+        .size()
+        .rename("own")
+        .reset_index()
+    )
+    audience = (
+        pairs.groupby(["pool", "item_id"], observed=True)["cookie_id"].nunique().rename("audience")
+    )
+    views = pairs.groupby(["pool", "item_id"], observed=True)["own"].sum().rename("views")
+    pairs = pairs.join(audience, on=["pool", "item_id"]).join(views, on=["pool", "item_id"])
+    pairs["aud_other"] = pairs["audience"] - 1
+    pairs["views_other"] = pairs["views"] - pairs["own"]
+    # Percentile inside the cookie's own pool: the count itself does not travel between
+    # pools of different size, its position in the distribution does.
+    grouped = pairs.groupby("pool", observed=True)
+    pairs["aud_pct"] = grouped["aud_other"].rank(pct=True)
+    pairs["views_pct"] = grouped["views_other"].rank(pct=True)
 
+    g = pairs.groupby("cookie_id")
     out = pd.DataFrame(index=index)
-    out["pop_aud_mean"] = np.log1p(g["aud_other"].mean())
-    out["pop_aud_med"] = np.log1p(g["aud_other"].median())
-    out["pop_aud_max"] = np.log1p(g["aud_other"].max())
-    out["pop_aud_std"] = np.log1p(g["aud_other"].std())
-    out["pop_views_mean"] = np.log1p(g["views_other"].mean())
-    out["pop_views_std"] = np.log1p(g["views_other"].std())
-    out["pop_solo_share"] = known.assign(solo=known["aud_other"] <= 0).groupby("cookie_id")["solo"].mean()
+    out["pop_pct_mean"] = g["aud_pct"].mean()
+    out["pop_pct_med"] = g["aud_pct"].median()
+    out["pop_pct_max"] = g["aud_pct"].max()
+    out["pop_pct_std"] = g["aud_pct"].std()
+    out["pop_views_pct_mean"] = g["views_pct"].mean()
+    out["pop_views_pct_std"] = g["views_pct"].std()
+    out["pop_solo_share"] = pairs.assign(solo=pairs["aud_other"] <= 0).groupby("cookie_id")["solo"].mean()
     return out
 
 
@@ -840,6 +856,7 @@ def build_features(
     meta: pd.DataFrame,
     fit_ids: pd.Index | None = None,
     bigrams: list[str] | None = None,
+    pool: pd.Series | None = None,
 ) -> pd.DataFrame:
     """Assemble every block for the cookies present in `meta`.
 
@@ -848,6 +865,8 @@ def build_features(
     a scored cookie contains can influence how it is described.
     """
     bigrams = bigrams if bigrams is not None else top_bigrams(events, fit_ids)
+    if pool is None:
+        pool = pd.Series("all", index=pd.Index(meta["cookie_id"], name="cookie_id"))
     blocks = [
         _block_volume_and_mix(events),
         _block_transitions(events, bigrams),
@@ -860,7 +879,7 @@ def build_features(
         _block_id_structure(events),
         _block_dt_granularity(events),
         _block_catalog_shares(events, fit_ids),
-        _block_popularity(events, fit_ids),
+        _block_popularity(events, pool),
         _block_crowd(events, fit_ids),
         _block_conditional_timing(events),
         _block_navigation(events),

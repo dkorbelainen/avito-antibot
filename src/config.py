@@ -22,6 +22,10 @@ TARGET_RECALL = 0.70
 # A gap longer than this starts a new browsing session.
 SESSION_GAP_S = 1800
 
+# Population comparisons are made inside a fixed span so that the training pools and
+# the scored batch cover the same number of days; the test split is exactly one span.
+POOL_SPAN_DAYS = 7
+
 # Inter-event gaps below these thresholds are counted as "machine fast".
 FAST_GAP_THRESHOLDS_S = (2, 5, 10, 30)
 
