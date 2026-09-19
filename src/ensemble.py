@@ -18,7 +18,7 @@ from sklearn.model_selection import StratifiedKFold
 
 from . import config, validate
 from .model import Kind, ModelSpec, estimate_rounds, rank_average
-from .pipeline import build_dataset
+from .pipeline import build_dataset, feature_code_hash
 
 KINDS: tuple[Kind, ...] = ("lgb", "cat", "xgb")
 
@@ -66,7 +66,12 @@ def family_oof(
     for kind in kinds:
         spec = load_spec(kind, x, y, folds, tuned)
         specs[kind] = spec
-        cache = config.CACHE_DIR / f"oof_{kind}_{tag}_{seeds}seeds_{x.shape[1]}f.npy"
+        # The column count is not a safe cache key on its own: a feature block can be
+        # rewritten without changing the width, and a stale array then looks valid.
+        cache = (
+            config.CACHE_DIR
+            / f"oof_{kind}_{tag}_{seeds}seeds_{x.shape[1]}f_{feature_code_hash()}.npy"
+        )
         if cache.exists() and not refresh:
             oof[kind] = np.load(cache)
             print(f"{kind}: cached {cache.name}")

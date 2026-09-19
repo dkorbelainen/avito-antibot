@@ -26,14 +26,14 @@ class Dataset:
 _FEATURE_SOURCES = ("data.py", "features.py", "timeseries.py")
 
 
-def _feature_code_hash() -> str:
+def feature_code_hash() -> str:
     """Cache key tied to the feature code, so edits can never serve a stale matrix."""
     source = b"".join((config.ROOT / "src" / name).read_bytes() for name in _FEATURE_SOURCES)
     return hashlib.sha256(source).hexdigest()[:12]
 
 
 def build_dataset(cache: bool = True) -> Dataset:
-    cache_path = config.CACHE_DIR / f"features_{_feature_code_hash()}.parquet"
+    cache_path = config.CACHE_DIR / f"features_{feature_code_hash()}.parquet"
     train, test = data.load_splits()
     meta = pd.concat([train.drop(columns=["target"]), test], ignore_index=True)
 
