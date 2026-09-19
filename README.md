@@ -44,10 +44,10 @@ python -m src.submit --name final
 
 Events are clipped to each cookie's observation window — 12.4% of the raw rows are
 timestamped after `window_end_ts` and would not be available at scoring time. From the
-surviving events, 423 features are built in 15 families covering event volume and mix,
+surviving events, 457 features are built in 16 families covering event volume and mix,
 transition bigrams, the micro-structure of inter-event gaps, session shape, content
 diversity, pagination sweeps, cursor trajectory geometry, platform and User-Agent,
-dwell times, context switching, catalogue profile, item-id structure, sequence n-grams,
+dwell times, context switching, catalogue profile, item-id structure, sequence n-grams, the event stream seen as a point process,
 and percentile ranks within the cookie's own platform. Three gradient boosting models
 are tuned on PR-AUC and blended in rank space. Decisions are made on repeated
 stratified CV over the whole training set, cross-checked against day-by-day forward

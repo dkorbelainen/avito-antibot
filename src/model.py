@@ -76,24 +76,27 @@ def fit_predict(
     y_train: pd.Series,
     x_valid: pd.DataFrame,
     seed: int = config.SEED,
+    weight: np.ndarray | None = None,
 ) -> np.ndarray:
     params = spec.resolved(seed)
     if spec.kind == "lgb":
         import lightgbm as lgb
 
         booster = lgb.train(
-            params, lgb.Dataset(x_train, y_train), num_boost_round=spec.n_rounds
+            params,
+            lgb.Dataset(x_train, y_train, weight=weight),
+            num_boost_round=spec.n_rounds,
         )
         return booster.predict(x_valid)
     if spec.kind == "cat":
         from catboost import CatBoostClassifier
 
         model = CatBoostClassifier(iterations=spec.n_rounds, **params)
-        model.fit(x_train, y_train)
+        model.fit(x_train, y_train, sample_weight=weight)
         return model.predict_proba(x_valid)[:, 1]
     import xgboost as xgb
 
-    dtrain = xgb.DMatrix(x_train, label=y_train)
+    dtrain = xgb.DMatrix(x_train, label=y_train, weight=weight)
     booster = xgb.train(params, dtrain, num_boost_round=spec.n_rounds)
     return booster.predict(xgb.DMatrix(x_valid))
 

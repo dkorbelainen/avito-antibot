@@ -24,6 +24,12 @@ def main() -> None:
     parser.add_argument("--features", default="", help="regex of feature names to keep")
     parser.add_argument("--select-k", type=int, default=0, help="keep top-k by in-fold gain")
     parser.add_argument("--params", default="", help="JSON overriding the model defaults")
+    parser.add_argument(
+        "--recency",
+        type=float,
+        default=0.0,
+        help="half-life in days for recency sample weights; 0 = uniform",
+    )
     args = parser.parse_args()
 
     dataset = build_dataset(cache=not args.no_cache)
@@ -38,7 +44,21 @@ def main() -> None:
     rounds = args.rounds or estimate_rounds(args.kind, x, y, folds[:3], params_override=params or None)
     spec = ModelSpec(kind=args.kind, n_rounds=rounds, params=params)
 
-    report = validate.repeated_cv(spec, x, y, n_seeds=args.seeds, select_k=args.select_k)
+    # Test windows lie after every training window, so the newest training days are the
+    # closest thing to the scored population.
+    weight = (
+        None
+        if not args.recency
+        else 0.5 ** ((dataset.day_index.max() - dataset.day_index) / args.recency)
+    )
+    report = validate.repeated_cv(
+        spec,
+        x,
+        y,
+        n_seeds=args.seeds,
+        select_k=args.select_k,
+        weight=None if weight is None else weight.to_numpy(dtype="float64"),
+    )
     chain = (
         None
         if args.no_chain
@@ -54,6 +74,7 @@ def main() -> None:
             "n_features": x.shape[1],
             "select_k": args.select_k,
             "seeds": args.seeds,
+            "recency": args.recency,
         }
         | (chain or {}),
     )

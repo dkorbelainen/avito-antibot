@@ -44,6 +44,7 @@ def oof_predictions(
     seed: int,
     n_folds: int = config.N_FOLDS,
     select_k: int = 0,
+    weight: np.ndarray | None = None,
 ) -> np.ndarray:
     oof = np.zeros(len(x), dtype=float)
     splitter = StratifiedKFold(n_splits=n_folds, shuffle=True, random_state=seed)
@@ -55,7 +56,12 @@ def oof_predictions(
             # takes part in choosing its own features.
             columns = select_features(spec.kind, x_tr, y_tr, select_k, seed)
         oof[valid_idx] = fit_predict(
-            spec, x_tr[columns], y_tr, x.iloc[valid_idx][columns], seed=seed
+            spec,
+            x_tr[columns],
+            y_tr,
+            x.iloc[valid_idx][columns],
+            seed=seed,
+            weight=None if weight is None else weight[train_idx],
         )
     return oof
 
@@ -84,13 +90,20 @@ def repeated_cv(
     n_seeds: int = config.N_SEEDS,
     n_folds: int = config.N_FOLDS,
     select_k: int = 0,
+    weight: np.ndarray | None = None,
 ) -> dict[str, object]:
     """Primary scheme: repeated stratified CV, reported as mean +/- std over seeds."""
     per_seed: list[dict[str, float]] = []
     oof_sum = np.zeros(len(x), dtype=float)
     for offset in range(n_seeds):
         oof = oof_predictions(
-            spec, x, y, seed=config.SEED + offset, n_folds=n_folds, select_k=select_k
+            spec,
+            x,
+            y,
+            seed=config.SEED + offset,
+            n_folds=n_folds,
+            select_k=select_k,
+            weight=weight,
         )
         per_seed.append(score(y, oof))
         oof_sum += pd.Series(oof).rank(pct=True).to_numpy()
