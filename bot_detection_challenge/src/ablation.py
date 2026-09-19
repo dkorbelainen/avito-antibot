@@ -35,19 +35,19 @@ def main() -> None:
     x, y = dataset.x_train, dataset.y_train
     folds = list(StratifiedKFold(config.N_FOLDS, shuffle=True, random_state=config.SEED).split(x, y))
 
-    rounds = estimate_rounds(args.kind, x, y, folds)
+    rounds = estimate_rounds(args.kind, x, y, folds[:3])
     full = validate.repeated_cv(ModelSpec(args.kind, rounds), x, y, n_seeds=args.seeds)
     print(validate.format_report("full", full))
     validate.log_result("ablation_full", full, {"kind": args.kind, "rounds": rounds})
 
-    uncovered = [c for c in x.columns if not any(x.filter(regex=r).columns.str.fullmatch(c).any() for r in BLOCKS.values())]
-    if uncovered:
-        print(f"warning: columns in no block: {uncovered}")
+    covered = set().union(*(set(x.filter(regex=pattern).columns) for pattern in BLOCKS.values()))
+    if missing := sorted(set(x.columns) - covered):
+        print(f"warning: columns in no block: {missing}")
 
     for name, pattern in BLOCKS.items():
         kept = x.drop(columns=x.filter(regex=pattern).columns)
         report = validate.repeated_cv(
-            ModelSpec(args.kind, estimate_rounds(args.kind, kept, y, folds)), kept, y, n_seeds=args.seeds
+            ModelSpec(args.kind, estimate_rounds(args.kind, kept, y, folds[:3])), kept, y, n_seeds=args.seeds
         )
         delta = report["p_at_r70_mean"] - full["p_at_r70_mean"]
         delta_pr = report["pr_auc_mean"] - full["pr_auc_mean"]

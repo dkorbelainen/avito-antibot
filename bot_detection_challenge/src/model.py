@@ -24,7 +24,7 @@ LGB_PARAMS: dict[str, object] = {
     "verbose": -1,
     "deterministic": True,
     "force_row_wise": True,
-    "num_threads": 8,
+    "num_threads": 6,
 }
 
 CAT_PARAMS: dict[str, object] = {
@@ -34,7 +34,7 @@ CAT_PARAMS: dict[str, object] = {
     "l2_leaf_reg": 6.0,
     "verbose": 0,
     "allow_writing_files": False,
-    "thread_count": 8,
+    "thread_count": 6,
 }
 
 XGB_PARAMS: dict[str, object] = {
@@ -46,7 +46,7 @@ XGB_PARAMS: dict[str, object] = {
     "colsample_bytree": 0.7,
     "reg_lambda": 5.0,
     "tree_method": "hist",
-    "nthread": 8,
+    "nthread": 6,
     "verbosity": 0,
 }
 
@@ -124,12 +124,13 @@ def estimate_rounds(
     x: pd.DataFrame,
     y: pd.Series,
     folds: list[tuple[np.ndarray, np.ndarray]],
-    max_rounds: int = 4000,
-    patience: int = 150,
+    max_rounds: int = 2500,
+    patience: int = 100,
     seed: int = config.SEED,
+    params_override: dict[str, object] | None = None,
 ) -> int:
     """Median best iteration across folds, early-stopped on PR-AUC."""
-    spec = ModelSpec(kind=kind)
+    spec = ModelSpec(kind=kind, params=params_override or {})
     params = spec.resolved(seed)
     best: list[int] = []
     for train_idx, valid_idx in folds:

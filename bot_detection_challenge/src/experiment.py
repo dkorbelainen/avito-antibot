@@ -30,7 +30,7 @@ def main() -> None:
     folds = list(
         StratifiedKFold(config.N_FOLDS, shuffle=True, random_state=config.SEED).split(x, y)
     )
-    rounds = args.rounds or estimate_rounds(args.kind, x, y, folds)
+    rounds = args.rounds or estimate_rounds(args.kind, x, y, folds[:3])
     spec = ModelSpec(kind=args.kind, n_rounds=rounds)
 
     report = validate.repeated_cv(spec, x, y, n_seeds=args.seeds)
