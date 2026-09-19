@@ -8,7 +8,7 @@ from dataclasses import dataclass
 import numpy as np
 import pandas as pd
 
-from . import config, data, features
+from . import config, data, encoding, features
 
 
 @dataclass(frozen=True)
@@ -16,6 +16,8 @@ class Dataset:
     x_train: pd.DataFrame
     y_train: pd.Series
     x_test: pd.DataFrame
+    keys_train: pd.DataFrame
+    keys_test: pd.DataFrame
     day_index: pd.Series
     train_ids: pd.Index
     test_ids: pd.Index
@@ -35,17 +37,21 @@ def build_dataset(cache: bool = True) -> Dataset:
     train, test = data.load_splits()
     meta = pd.concat([train.drop(columns=["target"]), test], ignore_index=True)
 
-    if cache and cache_path.exists():
+    keys_path = encoding.keys_cache_path()
+    if cache and cache_path.exists() and keys_path.exists():
         matrix = pd.read_parquet(cache_path)
+        keys = pd.read_parquet(keys_path)
     else:
         events = data.clip_to_window(data.load_events(), meta)
         data.assert_no_future_leak(events, meta)
         matrix = features.build_features(
             events, meta, fit_ids=pd.Index(train["cookie_id"])
         )
+        keys = encoding.build_keys(events, meta)
         if cache:
             config.CACHE_DIR.mkdir(exist_ok=True)
             matrix.to_parquet(cache_path)
+            keys.to_parquet(keys_path)
 
     matrix = matrix.astype("float64").replace([np.inf, -np.inf], np.nan)
     # Some scoped blocks reproduce a global one exactly (the cursor exists only on
@@ -61,6 +67,8 @@ def build_dataset(cache: bool = True) -> Dataset:
         x_train=matrix.loc[train_ids].reset_index(drop=True),
         y_train=train["target"].reset_index(drop=True),
         x_test=matrix.loc[test_ids].reset_index(drop=True),
+        keys_train=keys.loc[train_ids].reset_index(drop=True),
+        keys_test=keys.loc[test_ids].reset_index(drop=True),
         day_index=day_index,
         train_ids=train_ids,
         test_ids=test_ids,

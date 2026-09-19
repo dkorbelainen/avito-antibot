@@ -24,6 +24,7 @@ def main() -> None:
     parser.add_argument("--features", default="", help="regex of feature names to keep")
     parser.add_argument("--select-k", type=int, default=0, help="keep top-k by in-fold gain")
     parser.add_argument("--params", default="", help="JSON overriding the model defaults")
+    parser.add_argument("--target-encode", action="store_true")
     parser.add_argument(
         "--recency",
         type=float,
@@ -51,6 +52,7 @@ def main() -> None:
         if not args.recency
         else 0.5 ** ((dataset.day_index.max() - dataset.day_index) / args.recency)
     )
+    keys = dataset.keys_train if args.target_encode else None
     report = validate.repeated_cv(
         spec,
         x,
@@ -58,11 +60,14 @@ def main() -> None:
         n_seeds=args.seeds,
         select_k=args.select_k,
         weight=None if weight is None else weight.to_numpy(dtype="float64"),
+        keys=keys,
     )
     chain = (
         None
         if args.no_chain
-        else validate.forward_chain(spec, x, y, dataset.day_index, block=args.block_chain)
+        else validate.forward_chain(
+            spec, x, y, dataset.day_index, block=args.block_chain, keys=keys
+        )
     )
     print(validate.format_report(args.name, report, chain))
     validate.log_result(
@@ -75,6 +80,7 @@ def main() -> None:
             "select_k": args.select_k,
             "seeds": args.seeds,
             "recency": args.recency,
+            "target_encode": args.target_encode,
         }
         | (chain or {}),
     )
