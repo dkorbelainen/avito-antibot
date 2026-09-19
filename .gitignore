@@ -1,0 +1,30 @@
+# internal working docs, plans, experiment notes — not part of the deliverable
+docs/
+notes/
+*.plan.md
+NOTES.md
+PLAN.md
+JOURNAL.md
+
+# jupyter
+.ipynb_checkpoints/
+**/.ipynb_checkpoints/
+*-checkpoint.ipynb
+*-checkpoint.md
+
+# python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.env
+.ipynb_checkpoints
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+
+# artifacts
+artifacts/
+*.pkl
+*.joblib
+*.log
