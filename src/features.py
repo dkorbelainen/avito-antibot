@@ -318,11 +318,39 @@ def _block_client(events: pd.DataFrame) -> pd.DataFrame:
     out["ua_mobile_rate"] = ua.str.contains(
         "Android|iPhone|Mobile", case=False, regex=True
     ).groupby(events["cookie_id"]).mean()
-    family = ua.str.extract(r"(YaBrowser|HeadlessChrome|Firefox|Chrome|Safari)")[0].fillna(
-        "other"
-    )
+    # The family list has to name the scripted clients explicitly. Lumping curl,
+    # Scrapy and python-requests into "other" put them in the same bucket as the
+    # native Avito app, which is the largest non-browser client and mostly human.
+    family = ua.str.extract(
+        r"^(Avito|curl|Scrapy|node-fetch|python-requests|python-urllib3|Go-http-client)/"
+    )[0]
+    family = family.fillna(
+        ua.str.extract(r"(YaBrowser|HeadlessChrome|Firefox|Chrome|Safari)")[0]
+    ).fillna("other")
     family_counts = _share_table(events.assign(ua_family=family), "ua_family", "uafam_")
     out = out.join(family_counts.div(n, axis=0))
+    out["ua_script_rate"] = (
+        family.isin(config.SCRIPT_CLIENTS).groupby(events["cookie_id"]).mean()
+    )
+
+    # Version and device numbers: a collector pinned to one build looks different from
+    # a population that drifts across releases.
+    out["ua_app_version"] = (
+        ua.str.extract(r"^Avito/(\d+)")[0].astype(float).groupby(events["cookie_id"]).max()
+    )
+    os_version = ua.str.extract(r"Android (\d+)")[0].fillna(
+        ua.str.extract(r"iOS (\d+)")[0]
+    )
+    out["ua_os_version"] = os_version.astype(float).groupby(events["cookie_id"]).max()
+    out["ua_browser_version"] = (
+        ua.str.extract(r"(?:Chrome|Firefox|Safari)/(\d+)")[0]
+        .astype(float)
+        .groupby(events["cookie_id"])
+        .max()
+    )
+    device = ua.str.extract(r"(?:Android \d+; |iPhone; iOS [\d.]+; )([^)]+)")[0]
+    device_freq = device.value_counts(normalize=True)
+    out["ua_device_freq"] = device.map(device_freq).groupby(events["cookie_id"]).mean()
 
     # A rare UA string is itself suspicious, independent of what it claims to be.
     ua_freq = ua.value_counts()

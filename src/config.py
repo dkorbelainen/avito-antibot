@@ -50,4 +50,13 @@ EVENT_NAMES = (
 ENGAGEMENT_EVENTS = ("photo_swipe", "favorite_add", "login")
 CONTACT_EVENTS = ("contact_phone_show", "contact_chat_open", "contact_message_sent")
 
+SCRIPT_CLIENTS = (
+    "curl",
+    "Scrapy",
+    "node-fetch",
+    "python-requests",
+    "python-urllib3",
+    "Go-http-client",
+)
+
 PLATFORMS = ("web", "desktop", "android", "ios")

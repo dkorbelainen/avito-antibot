@@ -1,0 +1,11 @@
+{
+  "params": {
+    "learning_rate": 0.04101946820511842,
+    "depth": 6,
+    "l2_leaf_reg": 21.59529545836195,
+    "random_strength": 1.5749555744314203,
+    "bagging_temperature": 1.53245053872073
+  },
+  "rounds": 572,
+  "pr_auc": 0.7828624325122706
+}
