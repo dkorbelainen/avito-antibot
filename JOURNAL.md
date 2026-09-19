@@ -7,43 +7,43 @@ Machine-readable twin: `logs/results.jsonl`.
 Metric: `P@R70` from the official `metric.py`. Validation: RepeatedStratifiedKFold
 5 folds x 5 seeds over the full train, unless noted.
 
-| # | Date | Experiment | Features | P@R70 | ROC-AUC | PR-AUC | Verdict |
-|---|---|---|---|---|---|---|---|
-| 0 | 2026-09-19 | EDA baseline, ~50 hand features, LGBM, single seed | 50 | 0.707 | 0.927 | 0.723 | anchor |
-| 1 | 2026-09-19 | same baseline through the harness (3 seeds) | 47 | 0.7446 | 0.9273 | 0.7757 | reference |
-| 2 | 2026-09-19 | core A: 11 feature blocks, LGBM | 178 | **0.7785** | 0.9348 | 0.7880 | accepted, +0.034 |
-| 3 | 2026-09-19 | core A, CatBoost | 178 | 0.7555 | 0.9373 | 0.7849 | blend partner |
-| 4 | 2026-09-19 | core A, XGBoost | 178 | 0.7686 | 0.9358 | 0.7866 | blend partner |
-| 5 | 2026-09-19 | + catalog shares, id structure, dt granularity, dwell, navigation, deep pointer geometry | 353 | **0.7850** | 0.9394 | 0.7933 | accepted, forward-chain 0.7482 -> 0.7705 |
-| 6 | 2026-09-19 | + peer-relative ranks (day and platform) + platform-scoped blocks | 457 | 0.7953 | 0.9417 | 0.7956 | **rejected by the gate**: forward-chain 0.7705 -> 0.7369 |
-| 6a | 2026-09-19 | same, without the day-relative ranks | 437 | 0.7949 | 0.9410 | 0.7955 | forward-chain restored to 0.7693 |
-| 6b | 2026-09-19 | same, without the platform-scoped blocks | 394 | 0.7987 | 0.9414 | 0.7966 | forward-chain 0.7637 |
-| 7 | 2026-09-19 | **core set**: 6a minus `window_day_index`, 5 seeds | 436 | 0.7844 | 0.9424 | 0.7949 | accepted, forward-chain 0.7709 |
-| 7a | 2026-09-19 | core set with in-fold top-200 gain selection, 3 seeds | 200/436 | 0.7967 | 0.9408 | 0.7950 | rejected, no gain |
-| 7b | 2026-09-19 | core set with 13 exactly duplicated columns removed | 423 | — | — | — | housekeeping, carried into every later run |
-| 8 | 2026-09-19 | **leak-free fitting**: bigram and catalogue vocabularies and peer-rank references fitted on train only | 423 | **0.7936** | 0.9416 | 0.7972 | accepted as the new reference, fc 0.7575 |
-| 9 | 2026-09-19 | + time-series block (binned activity, gzip repetitiveness, circular time, gap shape), global and mobile-scoped | 491 | 0.7864 | 0.9419 | 0.7959 | rejected, PR down |
-| 9a | 2026-09-19 | same, scoped blocks removed entirely | 394 | 0.7873 | 0.9422 | 0.7963 | rejected, fc 0.7498 |
-| 9b | 2026-09-19 | same, only the mobile copy of the time-series block removed | 457 | 0.7924 | 0.9415 | 0.7977 | rejected, fc 0.7417 |
-| 10 | 2026-09-19 | reference set, binned activity only from the time-series block | 447 | 0.7888 | 0.9415 | 0.7969 | rejected |
-| 11 | 2026-09-19 | reference set + `is_unbalance` | 423 | 0.7945 | 0.9419 | **0.7991** | accepted, R@FPR1% 0.6345 -> 0.6407 |
-| 12 | 2026-09-19 | 9b + `is_unbalance` | 457 | 0.7917 | 0.9422 | **0.7993** | accepted, fc 0.7575 -> 0.7692 |
-| 13 | 2026-09-19 | core + recency sample weights, half-life 7 days | 457 | 0.7969 | 0.9419 | 0.7979 | rejected, PR down |
-| 13a | 2026-09-19 | same, half-life 14 days | 457 | 0.7969 | 0.9425 | 0.7987 | rejected, PR down |
-| 14 | 2026-09-19 | core with Optuna-tuned LightGBM (random-CV objective) | 457 | 0.7953 | 0.9412 | 0.8004 | rejected by the gate: fc 0.7692 -> 0.7380 |
-| 15 | 2026-09-19 | **scripted HTTP clients split out of the User-Agent**, plus app/OS/browser versions and device rarity | 468 | **0.8034** | 0.9426 | **0.8018** | accepted, every metric up, fc 0.7740 |
-| 16 | 2026-09-19 | fold-safe target encoding of exact UA, dominant category and dominant location | 471 | 0.7962 | 0.9387 | 0.7969 | rejected, every metric down |
-| 17 | 2026-09-19 | Optuna with half the objective earned on forward-looking splits | 468 | 0.7974 | 0.9422 | 0.8003 | rejected, fc 0.7740 -> 0.7364 |
-| 18 | 2026-09-19 | coordinate sweep around the defaults, ten points, three seeds | 468 | 0.8069 | 0.9422 | 0.8014 | defaults kept, every move loses |
-| 19 | 2026-09-19 | leave-one-family probes on the catalogue and query blocks | 373 / 428 | 0.7933 / 0.7987 | 0.9432 | 0.8013 | both families kept |
-| 20 | 2026-09-19 | **item popularity block** plus six micro-probes (device build, calendar, `item_id` scale, screen position, UA rarity, cookie age) | 475 | **0.8807** | 0.9489 | **0.8307** | accepted, fc 0.8778, F32 |
-| 21 | 2026-09-19 | `scale_pos_weight` sweep 3 / 6 / 11.3 / 25 | 475 | 0.8849 at 25 | 0.9487 | 0.8303 | rejected, stock `is_unbalance` kept, F37 |
-| 22 | 2026-09-19 | + crowd-relative block (dwell and page depth against the population) | 479 | 0.8808 | 0.9490 | 0.8306 | accepted, fc 0.8739, F41 |
-| 23 | 2026-09-19 | strict rebuild of the matrix per cut exposes the popularity pool asymmetry | 479 | 0.8462 strict vs 0.8807 random | — | 0.8212 | defect, F38-F39 |
-| 24 | 2026-09-19 | **popularity as a percentile inside one symmetric pool** | 479 | **0.8894** | 0.9510 | **0.8363** | accepted, fc 0.8836, strict 0.8827, F40 |
-| 25 | 2026-09-19 | coordinate sweep around the defaults on the 479-column set, ten points | 479 | 0.8890 | 0.9510 | 0.8366 | defaults kept, F44 |
-| 26 | 2026-09-19 | 900 and 1200 rounds, `extra_trees`, `path_smooth` | 479 | 0.8903 best | 0.9503 | 0.8371 best | rejected, gain below seed noise, F51 |
-| **final** | 2026-09-19 | **LightGBM, defaults, bagged over 10 seeds** | 479 | **0.8894** (0.8911 rank-blended) | **0.9510** | **0.8363** | shipped, fc 0.8836, md5 `ffb2ec0bfa42d1c1256bdcb5d149132a` |
+| # | Experiment | Features | P@R70 | ROC-AUC | PR-AUC | Verdict |
+|---|---|---|---|---|---|---|
+| 0 | EDA baseline, ~50 hand features, LGBM, single seed | 50 | 0.707 | 0.927 | 0.723 | anchor |
+| 1 | same baseline through the harness (3 seeds) | 47 | 0.7446 | 0.9273 | 0.7757 | reference |
+| 2 | core A: 11 feature blocks, LGBM | 178 | **0.7785** | 0.9348 | 0.7880 | accepted, +0.034 |
+| 3 | core A, CatBoost | 178 | 0.7555 | 0.9373 | 0.7849 | blend partner |
+| 4 | core A, XGBoost | 178 | 0.7686 | 0.9358 | 0.7866 | blend partner |
+| 5 | + catalog shares, id structure, dt granularity, dwell, navigation, deep pointer geometry | 353 | **0.7850** | 0.9394 | 0.7933 | accepted, forward-chain 0.7482 -> 0.7705 |
+| 6 | + peer-relative ranks (day and platform) + platform-scoped blocks | 457 | 0.7953 | 0.9417 | 0.7956 | **rejected by the gate**: forward-chain 0.7705 -> 0.7369 |
+| 6a | same, without the day-relative ranks | 437 | 0.7949 | 0.9410 | 0.7955 | forward-chain restored to 0.7693 |
+| 6b | same, without the platform-scoped blocks | 394 | 0.7987 | 0.9414 | 0.7966 | forward-chain 0.7637 |
+| 7 | **core set**: 6a minus `window_day_index`, 5 seeds | 436 | 0.7844 | 0.9424 | 0.7949 | accepted, forward-chain 0.7709 |
+| 7a | core set with in-fold top-200 gain selection, 3 seeds | 200/436 | 0.7967 | 0.9408 | 0.7950 | rejected, no gain |
+| 7b | core set with 13 exactly duplicated columns removed | 423 | — | — | — | housekeeping, carried into every later run |
+| 8 | **leak-free fitting**: bigram and catalogue vocabularies and peer-rank references fitted on train only | 423 | **0.7936** | 0.9416 | 0.7972 | accepted as the new reference, fc 0.7575 |
+| 9 | + time-series block (binned activity, gzip repetitiveness, circular time, gap shape), global and mobile-scoped | 491 | 0.7864 | 0.9419 | 0.7959 | rejected, PR down |
+| 9a | same, scoped blocks removed entirely | 394 | 0.7873 | 0.9422 | 0.7963 | rejected, fc 0.7498 |
+| 9b | same, only the mobile copy of the time-series block removed | 457 | 0.7924 | 0.9415 | 0.7977 | rejected, fc 0.7417 |
+| 10 | reference set, binned activity only from the time-series block | 447 | 0.7888 | 0.9415 | 0.7969 | rejected |
+| 11 | reference set + `is_unbalance` | 423 | 0.7945 | 0.9419 | **0.7991** | accepted, R@FPR1% 0.6345 -> 0.6407 |
+| 12 | 9b + `is_unbalance` | 457 | 0.7917 | 0.9422 | **0.7993** | accepted, fc 0.7575 -> 0.7692 |
+| 13 | core + recency sample weights, half-life 7 days | 457 | 0.7969 | 0.9419 | 0.7979 | rejected, PR down |
+| 13a | same, half-life 14 days | 457 | 0.7969 | 0.9425 | 0.7987 | rejected, PR down |
+| 14 | core with Optuna-tuned LightGBM (random-CV objective) | 457 | 0.7953 | 0.9412 | 0.8004 | rejected by the gate: fc 0.7692 -> 0.7380 |
+| 15 | **scripted HTTP clients split out of the User-Agent**, plus app/OS/browser versions and device rarity | 468 | **0.8034** | 0.9426 | **0.8018** | accepted, every metric up, fc 0.7740 |
+| 16 | fold-safe target encoding of exact UA, dominant category and dominant location | 471 | 0.7962 | 0.9387 | 0.7969 | rejected, every metric down |
+| 17 | Optuna with half the objective earned on forward-looking splits | 468 | 0.7974 | 0.9422 | 0.8003 | rejected, fc 0.7740 -> 0.7364 |
+| 18 | coordinate sweep around the defaults, ten points, three seeds | 468 | 0.8069 | 0.9422 | 0.8014 | defaults kept, every move loses |
+| 19 | leave-one-family probes on the catalogue and query blocks | 373 / 428 | 0.7933 / 0.7987 | 0.9432 | 0.8013 | both families kept |
+| 20 | **item popularity block** plus six micro-probes (device build, calendar, `item_id` scale, screen position, UA rarity, cookie age) | 475 | **0.8807** | 0.9489 | **0.8307** | accepted, fc 0.8778, F32 |
+| 21 | `scale_pos_weight` sweep 3 / 6 / 11.3 / 25 | 475 | 0.8849 at 25 | 0.9487 | 0.8303 | rejected, stock `is_unbalance` kept, F37 |
+| 22 | + crowd-relative block (dwell and page depth against the population) | 479 | 0.8808 | 0.9490 | 0.8306 | accepted, fc 0.8739, F41 |
+| 23 | strict rebuild of the matrix per cut exposes the popularity pool asymmetry | 479 | 0.8462 strict vs 0.8807 random | — | 0.8212 | defect, F38-F39 |
+| 24 | **popularity as a percentile inside one symmetric pool** | 479 | **0.8894** | 0.9510 | **0.8363** | accepted, fc 0.8836, strict 0.8827, F40 |
+| 25 | coordinate sweep around the defaults on the 479-column set, ten points | 479 | 0.8890 | 0.9510 | 0.8366 | defaults kept, F44 |
+| 26 | 900 and 1200 rounds, `extra_trees`, `path_smooth` | 479 | 0.8903 best | 0.9503 | 0.8371 best | rejected, gain below seed noise, F51 |
+| **final** | **LightGBM, defaults, bagged over 10 seeds** | 479 | **0.8894** (0.8911 rank-blended) | **0.9510** | **0.8363** | shipped, fc 0.8836, md5 `ffb2ec0bfa42d1c1256bdcb5d149132a` |
 
 ## Findings
 

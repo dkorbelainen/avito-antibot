@@ -141,19 +141,17 @@ def progression(frame: pd.DataFrame):
     """Experiment history: the number that actually moved."""
     fig, ax = plt.subplots(figsize=(8.4, 3.6))
     x = np.arange(len(frame))
-    ax.plot(x, frame["P@R70"], color=BLUE, linewidth=2, marker="o", markersize=7, label="P@R70 (CV)")
+    # Линия идёт по ранговой смеси сидов — это то, что отправляется, и то же число,
+    # что стоит на PR-кривой. Полоса вокруг — разброс отдельных сидов.
+    line = frame["P@R70 сиды"].fillna(frame["P@R70"])
+    ax.plot(x, line, color=BLUE, linewidth=2, marker="o", markersize=7, label="P@R70 (CV)")
     ax.fill_between(
-        x,
-        frame["P@R70"] - frame["+/-"],
-        frame["P@R70"] + frame["+/-"],
-        color=BLUE,
-        alpha=0.13,
-        linewidth=0,
+        x, line - frame["+/-"], line + frame["+/-"], color=BLUE, alpha=0.13, linewidth=0
     )
     if frame["fc P@R70"].notna().any():
         ax.plot(x, frame["fc P@R70"], color=ORANGE, linewidth=2, marker="s",
                 markersize=6, label="P@R70 (forward-chain)")
-    for xi, value in zip(x, frame["P@R70"], strict=True):
+    for xi, value in zip(x, line, strict=True):
         ax.annotate(f"{value:.3f}", (xi, value), textcoords="offset points",
                     xytext=(0, 9), ha="center", fontsize=8.5, color=INK)
     # Подписи переносятся по словам: развёрнутые названия шагов под наклоном съедали
