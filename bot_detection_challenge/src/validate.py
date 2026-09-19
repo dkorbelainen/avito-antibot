@@ -43,14 +43,38 @@ def oof_predictions(
     y: pd.Series,
     seed: int,
     n_folds: int = config.N_FOLDS,
+    select_k: int = 0,
 ) -> np.ndarray:
     oof = np.zeros(len(x), dtype=float)
     splitter = StratifiedKFold(n_splits=n_folds, shuffle=True, random_state=seed)
     for train_idx, valid_idx in splitter.split(x, y):
+        x_tr, y_tr = x.iloc[train_idx], y.iloc[train_idx]
+        columns = x.columns
+        if select_k:
+            # Selection is refitted inside every fold, so the validation part never
+            # takes part in choosing its own features.
+            columns = select_features(spec.kind, x_tr, y_tr, select_k, seed)
         oof[valid_idx] = fit_predict(
-            spec, x.iloc[train_idx], y.iloc[train_idx], x.iloc[valid_idx], seed=seed
+            spec, x_tr[columns], y_tr, x.iloc[valid_idx][columns], seed=seed
         )
     return oof
+
+
+def select_features(
+    kind: str, x: pd.DataFrame, y: pd.Series, k: int, seed: int
+) -> pd.Index:
+    """Top-k features by LightGBM gain from a short screening model."""
+    import lightgbm as lgb
+
+    from .model import LGB_PARAMS
+
+    booster = lgb.train(
+        {**LGB_PARAMS, "seed": seed, "learning_rate": 0.05},
+        lgb.Dataset(x, y),
+        num_boost_round=300,
+    )
+    gains = pd.Series(booster.feature_importance("gain"), index=x.columns)
+    return gains.sort_values(ascending=False).head(k).index
 
 
 def repeated_cv(
@@ -59,12 +83,15 @@ def repeated_cv(
     y: pd.Series,
     n_seeds: int = config.N_SEEDS,
     n_folds: int = config.N_FOLDS,
+    select_k: int = 0,
 ) -> dict[str, object]:
     """Primary scheme: repeated stratified CV, reported as mean +/- std over seeds."""
     per_seed: list[dict[str, float]] = []
     oof_sum = np.zeros(len(x), dtype=float)
     for offset in range(n_seeds):
-        oof = oof_predictions(spec, x, y, seed=config.SEED + offset, n_folds=n_folds)
+        oof = oof_predictions(
+            spec, x, y, seed=config.SEED + offset, n_folds=n_folds, select_k=select_k
+        )
         per_seed.append(score(y, oof))
         oof_sum += pd.Series(oof).rank(pct=True).to_numpy()
     frame = pd.DataFrame(per_seed)
@@ -80,13 +107,19 @@ def forward_chain(
     y: pd.Series,
     day_index: pd.Series,
     first_valid_day: int = 7,
+    block: bool = False,
 ) -> dict[str, float]:
-    """Secondary scheme: train on every earlier day, validate on day k."""
+    """Secondary scheme: train on every earlier day, validate on day k.
+
+    With `block`, validate on all later days at once instead — the training set then
+    has the same size in every comparison, which matters when feature counts differ.
+    """
     days = sorted(day_index.unique())
+    targets = [days[first_valid_day]] if block else days[first_valid_day:]
     rows: list[dict[str, float]] = []
-    for day in days[first_valid_day:]:
+    for day in targets:
         train_mask = day_index < day
-        valid_mask = day_index == day
+        valid_mask = day_index >= day if block else day_index == day
         pred = fit_predict(spec, x[train_mask], y[train_mask], x[valid_mask])
         rows.append(score(y[valid_mask], pred))
     frame = pd.DataFrame(rows)

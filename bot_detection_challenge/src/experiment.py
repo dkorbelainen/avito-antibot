@@ -19,7 +19,9 @@ def main() -> None:
     parser.add_argument("--seeds", type=int, default=config.N_SEEDS)
     parser.add_argument("--no-cache", action="store_true")
     parser.add_argument("--no-chain", action="store_true")
+    parser.add_argument("--block-chain", action="store_true", help="one 7/7 day split instead of per-day")
     parser.add_argument("--features", default="", help="regex of feature names to keep")
+    parser.add_argument("--select-k", type=int, default=0, help="keep top-k by in-fold gain")
     args = parser.parse_args()
 
     dataset = build_dataset(cache=not args.no_cache)
@@ -33,13 +35,23 @@ def main() -> None:
     rounds = args.rounds or estimate_rounds(args.kind, x, y, folds[:3])
     spec = ModelSpec(kind=args.kind, n_rounds=rounds)
 
-    report = validate.repeated_cv(spec, x, y, n_seeds=args.seeds)
-    chain = None if args.no_chain else validate.forward_chain(spec, x, y, dataset.day_index)
+    report = validate.repeated_cv(spec, x, y, n_seeds=args.seeds, select_k=args.select_k)
+    chain = (
+        None
+        if args.no_chain
+        else validate.forward_chain(spec, x, y, dataset.day_index, block=args.block_chain)
+    )
     print(validate.format_report(args.name, report, chain))
     validate.log_result(
         args.name,
         report,
-        {"kind": args.kind, "rounds": rounds, "n_features": x.shape[1], "seeds": args.seeds}
+        {
+            "kind": args.kind,
+            "rounds": rounds,
+            "n_features": x.shape[1],
+            "select_k": args.select_k,
+            "seeds": args.seeds,
+        }
         | (chain or {}),
     )
 

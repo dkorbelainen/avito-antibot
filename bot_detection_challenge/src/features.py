@@ -340,9 +340,8 @@ def _block_cookie_meta(meta: pd.DataFrame) -> pd.DataFrame:
     out["cookie_created_hour"] = meta["cookie_created_at"].dt.hour.to_numpy()
     out["cookie_created_dow"] = meta["cookie_created_at"].dt.dayofweek.to_numpy()
     out["window_dow"] = meta["window_start_ts"].dt.dayofweek.to_numpy()
-    out["window_day_index"] = (
-        (start - start.min()) / np.timedelta64(1, "D")
-    ).astype(float)
+    # No absolute day index: test windows lie entirely after the training range, so a
+    # tree split on it cannot transfer.
     return out
 
 
@@ -625,23 +624,20 @@ _RELATIVE_BASE = (
 )
 
 
-def _block_relative(matrix: pd.DataFrame, meta: pd.DataFrame) -> pd.DataFrame:
-    """Percentile of each core feature among same-day and same-platform peers.
+def _block_relative(matrix: pd.DataFrame) -> pd.DataFrame:
+    """Percentile of each core feature among same-platform peers.
 
-    Absolute thresholds drift between days and between platforms; a rank inside the
-    peer group is the comparison a human analyst would actually make.
+    Absolute thresholds mean different things on mobile and on web, so a rank inside
+    the platform peer group is the comparison a human analyst would actually make.
+    The same trick keyed on the window day was tested and rejected: it lifted random
+    CV but cost 0.03 P@R70 on the forward-chaining check, because a within-day rank
+    encodes that day's population rather than the cookie.
     """
-    aligned = meta.set_index("cookie_id").loc[matrix.index]
-    day = aligned["window_start_ts"].dt.normalize()
     platform_columns = [f"plat_{p}" for p in config.PLATFORMS]
     dominant = matrix[platform_columns].idxmax(axis=1)
-
     out = pd.DataFrame(index=matrix.index)
-    available = [c for c in _RELATIVE_BASE if c in matrix.columns]
-    for column in available:
-        values = matrix[column]
-        out[f"rel_day_{column}"] = values.groupby(day.to_numpy()).rank(pct=True)
-        out[f"rel_plat_{column}"] = values.groupby(dominant.to_numpy()).rank(pct=True)
+    for column in (c for c in _RELATIVE_BASE if c in matrix.columns):
+        out[f"rel_plat_{column}"] = matrix[column].groupby(dominant.to_numpy()).rank(pct=True)
     out["dominant_platform"] = pd.Categorical(dominant).codes
     return out
 
@@ -740,4 +736,4 @@ def build_features(
     features = pd.concat(blocks, axis=1)
     features = features.join(_block_cookie_meta(meta), how="right")
     features = features.loc[meta["cookie_id"]]
-    return pd.concat([features, _block_relative(features, meta)], axis=1)
+    return pd.concat([features, _block_relative(features)], axis=1)

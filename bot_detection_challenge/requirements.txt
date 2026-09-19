@@ -1,0 +1,10 @@
+pandas==2.3.3
+numpy==2.5.2
+scikit-learn==1.9.0
+lightgbm==4.7.0
+catboost==1.2.10
+xgboost==3.3.0
+optuna==4.9.0
+pyarrow==25.0.1
+matplotlib==3.11.1
+jupyter==1.1.1
