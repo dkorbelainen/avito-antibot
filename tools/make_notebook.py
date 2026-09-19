@@ -51,10 +51,14 @@ burstiness, автокорреляция), структура сессий, ра
 структура множества `item_id`, TF-IDF по n-граммам последовательности событий,
 перцентильные ранги внутри своей платформы.
 
-**4. Что оказалось решающим.** Leave-one-block-out показал, что курсор даёт на порядок
-больше остальных блоков (−0.175 P@R70 при удалении против −0.01…−0.04 у прочих).
-Причина — не форма траектории, а **сам факт наличия координат**: на web/desktop поле
-заполнено у 66 % событий людей и у 33 % событий ботов.
+**4. Что оказалось решающим.** Два места. Leave-one-block-out показал, что курсор даёт
+на порядок больше остальных блоков (−0.175 P@R70 при удалении против −0.01…−0.04 у
+прочих), причём не формой траектории, а **самим фактом наличия координат**: на
+web/desktop поле заполнено у 66 % событий людей и у 33 % событий ботов. Второе — разбор
+User-Agent: скриптовые HTTP-клиенты (curl, Scrapy, node-fetch, python-requests,
+python-urllib3, Go-http-client) изначально сваливались в общую корзину `other` вместе с
+нативным приложением, то есть самое сильное положительное свидетельство усреднялось со
+своей противоположностью. Разделение дало +0.012 P@R70 одним шагом.
 
 **5. Как принимались решения.** Целевая метрика крайне шумная (размах 0.61–0.79 по
 случайным фолдам и 0.49–0.79 по дням при стабильном ROC-AUC 0.90–0.96). Поэтому
@@ -62,8 +66,11 @@ burstiness, автокорреляция), структура сессий, ра
 неухудшении среднего P@R70 по 5 сидам и неухудшении forward-chaining. Этот гейт
 отклонил лучший по случайному CV вариант сессии — перцентильные ранги внутри дня.
 
-**6. Модель.** Ансамбль LightGBM + CatBoost + XGBoost, гиперпараметры подобраны Optuna
-по PR-AUC, смешивание в ранговом пространстве (метрика порядковая), бэггинг по сидам.
+**6. Модель.** Один LightGBM с бэггингом по 10 сидам в ранговом пространстве. Ансамбль
+из трёх семейств был в исходном плане и **проиграл замеру**: при поиске весов по OOF
+CatBoost и XGBoost получают ровно нулевой вес в любой комбинации. Два независимых
+запуска Optuna тоже проиграли выставленным вручную параметрам, а координатный свип
+вокруг них показал, что они лежат в локальном оптимуме на боевом протоколе.
 
 Использованы только open-source библиотеки, всё считается локально, внешних API и
 языковых моделей нет. Все сиды зафиксированы, версии — в `requirements.txt`.
@@ -354,40 +361,47 @@ md(r"""
 | `captcha_shown` как правило | встречается у 0.2 % ботов и 0 % людей, работать не с чем |
 | совпадающие метки времени как признак параллельных запросов | 1.8 % у ботов против 2.2 % у людей, различий нет |
 | несоответствие User-Agent и платформы | в данных отсутствует: мобильный UA всегда приходит с мобильной платформы |
+| отдельная модель-специалист по мобильному трафику | внутри подгруппы PR-AUC 0.6160 против 0.6327 у общей модели: 311 позитивов не тянут отдельную модель, а веб-строки, которые специалист выбрасывает, чему-то переносимому его учили |
+| перенос порядка внутри мобильной подгруппы и стекинг поверх двух скоров | каждый вариант меняет P@R70 в пределах собственного шума и теряет PR-AUC |
+| мобильная копия блока временного ряда | у мобильной куки почти нет немобильных событий, копия повторяет глобальный столбец и разбавляет сэмплирование признаков: PR-AUC 0.7959 против 0.7993 |
+| веса по свежести окна (half-life 7 и 14 дней) | PR-AUC вниз на 0.001 при неизменном forward-chaining: дрейфа, который они правили бы, в данных нет (все признаки кроме удалённого индекса дня смещаются не более чем на 0.12 σ) |
+| target encoding точного User-Agent, категории и локации | все четыре метрики вниз: после разбора User-Agent в признаки строка уже ничего не добавляет, а 148-уровневая статистика переобучается |
+| подбор гиперпараметров Optuna, два запуска | и по случайному CV, и с forward-looking-слагаемым в целевой функции оптимум уходит в слабую регуляризацию и проигрывает дефолтам на боевом протоколе |
+| ансамбль трёх семейств | поиск весов по OOF даёт CatBoost и XGBoost ровно ноль в каждой комбинации |
 
 ## 10. Финальная модель
 
-Три градиентных бустинга с подобранными Optuna параметрами, смешивание в ранговом
-пространстве, бэггинг по сидам. Веса подбираются по OOF на PR-AUC.
+Один LightGBM. Ансамбль проверялся честно: OOF каждого из трёх семейств считался на
+одних и тех же фолдах и сидах, после чего перебирались веса по сетке в пятых долях.
+Результат ниже — CatBoost и XGBoost получают ноль в любой комбинации, включая тройку.
+Прибыль даёт не смешивание семейств, а бэггинг по сидам: 0.8018 (среднее по сидам)
+против 0.8077 (ранговое усреднение по ним же).
 """)
 
 code(r"""
-from src.submit import load_spec, search_weights
+from src.ensemble import KINDS, family_oof, search_weights
 
-KINDS = ["lgb", "cat", "xgb"]
-specs = {kind: load_spec(kind, x, y, folds) for kind in KINDS}
-oof = {}
-for kind, spec in specs.items():
-    res = validate.repeated_cv(spec, x, y, n_seeds=config.N_SEEDS)
-    oof[kind] = res["oof"]
-    print(validate.format_report(f"{kind} (rounds={spec.n_rounds})", res))
+oof, _, specs = family_oof(KINDS, seeds=config.N_SEEDS, tuned=False, refresh=False)
+for subset in [("lgb",), ("cat",), ("xgb",), KINDS]:
+    part = {k: oof[k] for k in subset}
+    weights, report = search_weights(part, y)
+    shown = " ".join(f"{k}:{weights[k]:.2f}" for k in subset)
+    print(f"{'+'.join(subset):12s} {shown:30s} " + " ".join(f"{k} {v:.4f}" for k, v in report.items()))
 
-weights = search_weights(oof, y)
-oof_blend = rank_average([oof[k] for k in KINDS], [weights[k] for k in KINDS])
-blend_score = validate.score(y, oof_blend)
-print("\nвеса бленда:", weights)
-print("бленд OOF:", {k: round(v, 4) for k, v in blend_score.items()})
+spec = specs["lgb"]
+oof_final = oof["lgb"]
+print(f"\nитоговая модель: LightGBM, {spec.n_rounds} раундов, {x.shape[1]} признаков")
 """)
 
 code(r"""
-plots.pr_curve(y, oof_blend);
+plots.pr_curve(y, oof_final);
 """)
 
 code(r"""
 from src.model import feature_gain
 
 gains = sum(
-    feature_gain(specs["lgb"], x, y, seed=config.SEED + offset) for offset in range(3)
+    feature_gain(spec, x, y, seed=config.SEED + offset) for offset in range(3)
 ).sort_values(ascending=False)
 plots.importances(gains, top=20);
 """)
@@ -399,11 +413,12 @@ md(r"""
 code(r"""
 TRACK = {
     "B0_baseline_simple": "baseline, 47 признаков",
-    "ablation_full": "ядро A, 178",
+    "ablation_full": "ядро, 178",
     "A3_pointer_deep_lgb": "+ геометрия курсора, 353",
-    "A4_relative_scoped": "+ ранги дня (отвергнут), 457",
-    "A5_core": "рабочий набор, 423",
-    "final_blend": "бленд трёх моделей",
+    "A7_core_nofit_leak": "словари и ранги только по train, 423",
+    "A12_core": "+ временной ряд и баланс классов, 457",
+    "A15_ua_clients": "+ разбор User-Agent, 468",
+    "final": "финальная модель, бэггинг по 10 сидам",
 }
 timeline = report.table(list(TRACK)).assign(шаг=lambda f: f.experiment.map(TRACK))
 plots.progression(timeline.dropna(subset=["P@R70"]))
@@ -413,22 +428,16 @@ timeline
 md(r"""
 ## 12. Предсказание и файл ответа
 
-Модели переобучаются на полном train, предсказания по каждому семейству усредняются
-по сидам в ранговом пространстве, затем смешиваются с найденными весами. Итоговый
-score линейно растягивается в [0, 1] — метрика читает только порядок.
+Модель переобучается на полном train под 10 сидами, предсказания усредняются в
+ранговом пространстве. Итоговый score линейно растягивается в [0, 1] — метрика читает
+только порядок.
 """)
 
 code(r"""
-BAG = 10  # усреднение по сидам только для боевых предсказаний, валидация идёт на 5
-test_predictions = []
-for kind, spec in specs.items():
-    bagged = [
-        fit_predict(spec, x, y, dataset.x_test, seed=config.SEED + offset)
-        for offset in range(BAG)
-    ]
-    test_predictions.append(rank_average(bagged))
+from src.submit import BAG_SEEDS, bagged_predictions
 
-scores = rank_average(test_predictions, [weights[k] for k in KINDS])
+# Усреднение по сидам только для боевых предсказаний; валидация идёт на 5 сидах.
+scores = bagged_predictions(spec, x, y, dataset.x_test, BAG_SEEDS)
 submission = write_submission(dataset.test_ids, scores)
 
 assert len(submission) == len(test), "число строк не совпадает с test.csv"
