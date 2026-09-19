@@ -16,7 +16,7 @@ from .model import ModelSpec, fit_predict
 
 
 def _load_official_metric():
-    """Score with the organisers' own file so local numbers match the platform."""
+    """Score with `metric.py` so local numbers match the reported metric."""
     spec = importlib.util.spec_from_file_location("official_metric", config.ROOT / "metric.py")
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)

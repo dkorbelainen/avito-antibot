@@ -30,7 +30,7 @@ python -m src.submit --name final
 | `src/features.py` | all feature blocks |
 | `src/pipeline.py` | dataset assembly and caching, submission writing |
 | `src/model.py` | LightGBM / CatBoost / XGBoost behind one interface, rank blending |
-| `src/validate.py` | repeated CV, forward chaining, scoring with the official metric |
+| `src/validate.py` | repeated CV, forward chaining, scoring with `metric.py` |
 | `src/experiment.py` | CLI for a single named experiment |
 | `src/ablation.py` | leave-one-block-out over the feature families |
 | `src/diagnose.py` | metrics split by cookie regime |
@@ -44,7 +44,7 @@ python -m src.submit --name final
 
 Events are clipped to each cookie's observation window — 12.4% of the raw rows are
 timestamped after `window_end_ts` and would not be available at scoring time. From the
-surviving events, 436 features are built in 15 families covering event volume and mix,
+surviving events, 423 features are built in 15 families covering event volume and mix,
 transition bigrams, the micro-structure of inter-event gaps, session shape, content
 diversity, pagination sweeps, cursor trajectory geometry, platform and User-Agent,
 dwell times, context switching, catalogue profile, item-id structure, sequence n-grams,

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import json
 
 from sklearn.model_selection import StratifiedKFold
 
@@ -22,6 +23,7 @@ def main() -> None:
     parser.add_argument("--block-chain", action="store_true", help="one 7/7 day split instead of per-day")
     parser.add_argument("--features", default="", help="regex of feature names to keep")
     parser.add_argument("--select-k", type=int, default=0, help="keep top-k by in-fold gain")
+    parser.add_argument("--params", default="", help="JSON overriding the model defaults")
     args = parser.parse_args()
 
     dataset = build_dataset(cache=not args.no_cache)
@@ -32,8 +34,9 @@ def main() -> None:
     folds = list(
         StratifiedKFold(config.N_FOLDS, shuffle=True, random_state=config.SEED).split(x, y)
     )
-    rounds = args.rounds or estimate_rounds(args.kind, x, y, folds[:3])
-    spec = ModelSpec(kind=args.kind, n_rounds=rounds)
+    params = json.loads(args.params) if args.params else {}
+    rounds = args.rounds or estimate_rounds(args.kind, x, y, folds[:3], params_override=params or None)
+    spec = ModelSpec(kind=args.kind, n_rounds=rounds, params=params)
 
     report = validate.repeated_cv(spec, x, y, n_seeds=args.seeds, select_k=args.select_k)
     chain = (
