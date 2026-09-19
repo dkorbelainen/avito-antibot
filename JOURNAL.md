@@ -35,7 +35,15 @@ Metric: `P@R70` from the official `metric.py`. Validation: RepeatedStratifiedKFo
 | 16 | 2026-09-19 | fold-safe target encoding of exact UA, dominant category and dominant location | 471 | 0.7962 | 0.9387 | 0.7969 | rejected, every metric down |
 | 17 | 2026-09-19 | Optuna with half the objective earned on forward-looking splits | 468 | 0.7974 | 0.9422 | 0.8003 | rejected, fc 0.7740 -> 0.7364 |
 | 18 | 2026-09-19 | coordinate sweep around the defaults, ten points, three seeds | 468 | 0.8069 | 0.9422 | 0.8014 | defaults kept, every move loses |
-| **final** | 2026-09-19 | **LightGBM, defaults, bagged over 10 seeds** | 468 | **0.8077** | **0.9451** | **0.8077** | shipped, md5 `8c043f2e2ed5219ca600240ce99e6c47` |
+| 19 | 2026-09-19 | leave-one-family probes on the catalogue and query blocks | 373 / 428 | 0.7933 / 0.7987 | 0.9432 | 0.8013 | both families kept |
+| 20 | 2026-09-19 | **item popularity block** plus six micro-probes (device build, calendar, `item_id` scale, screen position, UA rarity, cookie age) | 475 | **0.8807** | 0.9489 | **0.8307** | accepted, fc 0.8778, F32 |
+| 21 | 2026-09-19 | `scale_pos_weight` sweep 3 / 6 / 11.3 / 25 | 475 | 0.8849 at 25 | 0.9487 | 0.8303 | rejected, stock `is_unbalance` kept, F37 |
+| 22 | 2026-09-19 | + crowd-relative block (dwell and page depth against the population) | 479 | 0.8808 | 0.9490 | 0.8306 | accepted, fc 0.8739, F41 |
+| 23 | 2026-09-19 | strict rebuild of the matrix per cut exposes the popularity pool asymmetry | 479 | 0.8462 strict vs 0.8807 random | — | 0.8212 | defect, F38-F39 |
+| 24 | 2026-09-19 | **popularity as a percentile inside one symmetric pool** | 479 | **0.8894** | 0.9510 | **0.8363** | accepted, fc 0.8836, strict 0.8827, F40 |
+| 25 | 2026-09-19 | coordinate sweep around the defaults on the 479-column set, ten points | 479 | 0.8890 | 0.9510 | 0.8366 | defaults kept, F44 |
+| 26 | 2026-09-19 | 900 and 1200 rounds, `extra_trees`, `path_smooth` | 479 | 0.8903 best | 0.9503 | 0.8371 best | rejected, gain below seed noise, F51 |
+| **final** | 2026-09-19 | **LightGBM, defaults, bagged over 10 seeds** | 479 | **0.8894** (0.8911 rank-blended) | **0.9510** | **0.8363** | shipped, fc 0.8836, md5 `ffb2ec0bfa42d1c1256bdcb5d149132a` |
 
 ## Findings
 
@@ -266,12 +274,16 @@ searched on PR-AUC:
 | xgb | 1.00 | 0.7875 | 0.9458 | 0.7980 | 0.6229 |
 | cat | 1.00 | 0.7826 | 0.9430 | 0.7916 | 0.6129 |
 
+Measured on the 468-column set; F43 repeats it on the final 479 columns and the answer
+does not move — LightGBM still takes weight 1.00 in every subset, at 0.8911 P@R70 and
+0.8404 PR-AUC against 0.8317 for XGBoost and 0.8231 for CatBoost.
+
 The grid runs in fifths, so the search had 0.80/0.20 available and still chose to give
 the other two families nothing. CatBoost and XGBoost are not merely weaker here, they
 are not decorrelated enough to pay for their weakness: LightGBM's errors are a subset
 of theirs on the features that matter. The shipped model is one family, bagged over
 seeds — the seed bag is what lifts 0.8018 (mean over seeds) to 0.8077 (rank-averaged
-across them).
+across them); on the final set the same step reads 0.8894 -> 0.8911.
 
 This is worth stating plainly because the blend was in the design from the start. It
 was measured rather than assumed, and it lost.
@@ -331,9 +343,10 @@ that matters — it is the reviewer's situation, and it reproduces the submitted
 rather than a file that happens to look like it.
 
 ### Where the session ended up
-Baseline 0.7446 P@R70, shipped 0.8077 — of that, the two largest single steps are the
-first feature core (+0.034) and the User-Agent client split (+0.012), and the rest is
-accumulated small gains. Everything in the "rejected" list was measured on the same
+Baseline 0.7446 P@R70, shipped 0.8894 — of that, the largest single step by far is the
+item popularity block (+0.077, and +0.086 once it was rebuilt as a percentile inside one
+pool), followed by the first feature core (+0.034) and the User-Agent client split
+(+0.012); the rest is accumulated small gains. Everything in the "rejected" list was measured on the same
 protocol and rolled back, including three ideas that were in the original design: the
 model blend, hyper-parameter tuning, and a subgroup specialist for mobile traffic.
 
@@ -382,7 +395,7 @@ web.
 If mobile were systematically mis-scaled against web, re-scaling each group with a
 label oracle would lift the global metric. It does not: replacing every score with the
 in-group, in-bin bot rate (order inside the group preserved) never beats the model —
-0.8008 at 24 bins, 0.7418 at 8, 0.7216 at 12, against 0.8077. The loss is ordering
+0.8008 at 24 bins, 0.7418 at 8, 0.7216 at 12, against 0.8077 on the 468-column set. F48 repeats the check, cross-fitted, on the final set. The loss is ordering
 inside the groups, not the groups' placement against each other.
 
 ### F30 — train and test are indistinguishable, so nothing needs dropping for drift
@@ -788,3 +801,19 @@ and `pipeline`, and never touches the ensemble module.
 Fixed by putting the feature-code hash in the cache name, the same hash that already
 guards the feature matrix in `src/pipeline.py`. The column count is not a safe key: a
 block can be rewritten without changing the width.
+
+### F51 — longer boosting and two structural knobs are all inside the seed noise
+A last sweep on the 479-column set, three seeds each, against the defaults at
+P@R70 0.8890 / PR-AUC 0.8366:
+
+| variant | P@R70 | ROC-AUC | PR-AUC |
+|---|---|---|---|
+| defaults, 601 rounds by early stopping | 0.8890 ±0.0032 | 0.9510 | 0.8366 |
+| 900 rounds | 0.8898 ±0.0022 | 0.9504 | 0.8370 |
+| 1200 rounds | 0.8903 ±0.0008 | 0.9503 | 0.8371 |
+| `extra_trees` | 0.8902 ±0.0049 | 0.9516 | 0.8340 |
+| `path_smooth = 10` | 0.8891 ±0.0037 | 0.9504 | 0.8335 |
+
+The best PR-AUC move is +0.0005 with a seed spread of ±0.002 to ±0.005, and ROC-AUC
+goes down in both longer runs. The gate rejects it by the same rule that rejected
+feature blocks: a gain smaller than the seed spread is not a gain. Defaults stand.

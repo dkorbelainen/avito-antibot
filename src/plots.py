@@ -6,6 +6,8 @@ and never cycled; magnitude charts use a single hue.
 
 from __future__ import annotations
 
+import textwrap
+
 import matplotlib as mpl
 import matplotlib.pyplot as plt
 import numpy as np
@@ -137,7 +139,7 @@ def regimes(frame: pd.DataFrame):
 
 def progression(frame: pd.DataFrame):
     """Experiment history: the number that actually moved."""
-    fig, ax = plt.subplots(figsize=(8, 3.1))
+    fig, ax = plt.subplots(figsize=(8.4, 3.6))
     x = np.arange(len(frame))
     ax.plot(x, frame["P@R70"], color=BLUE, linewidth=2, marker="o", markersize=7, label="P@R70 (CV)")
     ax.fill_between(
@@ -154,9 +156,11 @@ def progression(frame: pd.DataFrame):
     for xi, value in zip(x, frame["P@R70"], strict=True):
         ax.annotate(f"{value:.3f}", (xi, value), textcoords="offset points",
                     xytext=(0, 9), ha="center", fontsize=8.5, color=INK)
-    # Читаемая подпись шага, если она есть; иначе имя прогона.
-    labels = frame["шаг"] if "шаг" in frame.columns else frame["experiment"]
-    ax.set_xticks(x, labels, rotation=30, ha="right")
+    # Подписи переносятся по словам: развёрнутые названия шагов под наклоном съедали
+    # половину картинки.
+    source = frame["шаг"] if "шаг" in frame.columns else frame["experiment"]
+    labels = [textwrap.fill(str(name), width=16) for name in source]
+    ax.set_xticks(x, labels, fontsize=8)
     ax.set_ylabel("P@R70")
     ax.set_title("История экспериментов")
     ax.yaxis.grid(True)

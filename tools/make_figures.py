@@ -6,7 +6,12 @@ anything; run `python -m src.submit --name final_pct` first if the file is missi
 
 from __future__ import annotations
 
+import sys
+from pathlib import Path
+
 import numpy as np
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from src import config, plots, report
 from src.pipeline import build_dataset
