@@ -384,9 +384,12 @@ from src.ensemble import KINDS, family_oof, search_weights
 oof, _, specs = family_oof(KINDS, seeds=config.N_SEEDS, tuned=False, refresh=False)
 for subset in [("lgb",), ("cat",), ("xgb",), KINDS]:
     part = {k: oof[k] for k in subset}
-    weights, report = search_weights(part, y)
+    weights, subset_score = search_weights(part, y)
     shown = " ".join(f"{k}:{weights[k]:.2f}" for k in subset)
-    print(f"{'+'.join(subset):12s} {shown:30s} " + " ".join(f"{k} {v:.4f}" for k, v in report.items()))
+    print(
+        f"{'+'.join(subset):12s} {shown:30s} "
+        + " ".join(f"{k} {v:.4f}" for k, v in subset_score.items())
+    )
 
 spec = specs["lgb"]
 oof_final = oof["lgb"]
