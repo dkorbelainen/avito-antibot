@@ -1,0 +1,449 @@
+"""Per-cookie feature construction.
+
+Every block takes the already window-clipped event frame and returns a frame
+indexed by `cookie_id`. `build_features` is the only public entry point.
+"""
+
+from __future__ import annotations
+
+import numpy as np
+import pandas as pd
+from sklearn.decomposition import TruncatedSVD
+from sklearn.feature_extraction.text import TfidfVectorizer
+
+from . import config
+
+_EPS = 1e-9
+
+# Single letters keep the n-gram vocabulary small and the documents short.
+_EVENT_CODE = {
+    "search_results_view": "S",
+    "item_view": "I",
+    "photo_swipe": "P",
+    "seller_page_view": "L",
+    "contact_phone_show": "H",
+    "contact_chat_open": "C",
+    "contact_message_sent": "M",
+    "favorite_add": "F",
+    "login": "G",
+    "captcha_shown": "K",
+}
+
+
+def _entropy(frame: pd.DataFrame, value_col: str) -> pd.Series:
+    """Shannon entropy of `value_col` within each cookie, in nats."""
+    counts = frame.groupby(["cookie_id", value_col], observed=True).size()
+    shares = counts / counts.groupby(level=0).transform("sum")
+    return (-shares * np.log(shares)).groupby(level=0).sum()
+
+
+def _share_table(frame: pd.DataFrame, column: str, prefix: str) -> pd.DataFrame:
+    """Per-cookie counts of each value of `column`, one column per value."""
+    table = (
+        frame.groupby(["cookie_id", column], observed=True)
+        .size()
+        .unstack(fill_value=0)
+        .astype("float64")
+    )
+    table.columns = [f"{prefix}{c}" for c in table.columns]
+    return table
+
+
+def _grouped_corr(frame: pd.DataFrame, x: str, y: str) -> pd.Series:
+    """Pearson correlation of two columns inside each cookie, vectorised."""
+    valid = frame[["cookie_id", x, y]].dropna()
+    g = valid.groupby("cookie_id")
+    n = g.size()
+    sx, sy = g[x].sum(), g[y].sum()
+    sxx = g[x].apply(lambda s: float(np.dot(s, s)))
+    syy = g[y].apply(lambda s: float(np.dot(s, s)))
+    sxy = (valid[x] * valid[y]).groupby(valid["cookie_id"]).sum()
+    cov = sxy - sx * sy / n
+    den = np.sqrt((sxx - sx**2 / n) * (syy - sy**2 / n))
+    return (cov / den.replace(0, np.nan)).where(n > 2)
+
+
+def _block_volume_and_mix(events: pd.DataFrame) -> pd.DataFrame:
+    g = events.groupby("cookie_id")
+    out = pd.DataFrame(index=g.size().index)
+    out["n_events"] = g.size()
+    out["n_events_log"] = np.log1p(out["n_events"])
+
+    counts = _share_table(events, "event_name", "cnt_")
+    counts = counts.reindex(
+        columns=[f"cnt_{n}" for n in config.EVENT_NAMES], fill_value=0.0
+    )
+    rates = counts.div(out["n_events"], axis=0)
+    rates.columns = [c.replace("cnt_", "rate_") for c in counts.columns]
+
+    out = out.join(counts).join(rates)
+    out["rate_engagement"] = rates[
+        [f"rate_{n}" for n in config.ENGAGEMENT_EVENTS]
+    ].sum(axis=1)
+    out["rate_contact"] = rates[[f"rate_{n}" for n in config.CONTACT_EVENTS]].sum(axis=1)
+    out["ratio_search_item"] = counts["cnt_search_results_view"] / (
+        counts["cnt_item_view"] + 1.0
+    )
+    out["ratio_photo_item"] = counts["cnt_photo_swipe"] / (counts["cnt_item_view"] + 1.0)
+    out["ratio_contact_seller"] = out["rate_contact"] / (
+        rates["rate_seller_page_view"] + _EPS
+    )
+
+    hours = events.assign(hour=events["event_ts"].dt.hour)
+    out["n_active_hours"] = hours.groupby("cookie_id")["hour"].nunique()
+    out["events_per_active_hour"] = out["n_events"] / out["n_active_hours"]
+    out["hour_entropy"] = _entropy(hours, "hour")
+    night = hours["hour"].between(1, 5)
+    out["night_rate"] = night.groupby(hours["cookie_id"]).mean()
+    return out
+
+
+def _block_transitions(events: pd.DataFrame, top_bigrams: list[str]) -> pd.DataFrame:
+    seq = events[["cookie_id", "event_name"]].copy()
+    seq["prev"] = seq.groupby("cookie_id", observed=True)["event_name"].shift()
+    pairs = seq.dropna(subset=["prev"]).copy()
+    pairs["bigram"] = (
+        pairs["prev"].astype(str) + ">" + pairs["event_name"].astype(str)
+    )
+
+    out = pd.DataFrame(index=events["cookie_id"].drop_duplicates().sort_values())
+    n_pairs = pairs.groupby("cookie_id").size()
+    out["n_bigrams_uniq"] = pairs.groupby("cookie_id")["bigram"].nunique()
+    out["bigram_entropy"] = _entropy(pairs, "bigram")
+    out["self_loop_rate"] = (
+        (pairs["prev"].astype(str) == pairs["event_name"].astype(str))
+        .groupby(pairs["cookie_id"])
+        .mean()
+    )
+
+    counts = _share_table(pairs, "bigram", "bg_")
+    counts = counts.reindex(columns=[f"bg_{b}" for b in top_bigrams], fill_value=0.0)
+    out = out.join(counts.div(n_pairs, axis=0))
+    return out
+
+
+def _block_timing(events: pd.DataFrame) -> pd.DataFrame:
+    frame = events[["cookie_id", "event_ts"]].copy()
+    frame["dt"] = frame.groupby("cookie_id")["event_ts"].diff().dt.total_seconds()
+    gaps = frame.dropna(subset=["dt"])
+    g = gaps.groupby("cookie_id")
+
+    out = pd.DataFrame(index=events["cookie_id"].drop_duplicates().sort_values())
+    quantiles = g["dt"].quantile([0.1, 0.25, 0.5, 0.75, 0.9]).unstack()
+    quantiles.columns = [f"dt_q{int(q * 100)}" for q in quantiles.columns]
+    out = out.join(quantiles)
+    out["dt_min"] = g["dt"].min()
+    out["dt_max"] = g["dt"].max()
+    out["dt_mean"] = g["dt"].mean()
+    out["dt_std"] = g["dt"].std()
+    out["dt_iqr"] = out["dt_q75"] - out["dt_q25"]
+    out["dt_cv"] = out["dt_std"] / (out["dt_mean"] + _EPS)
+    out["dt_mad"] = (
+        (gaps["dt"] - gaps["cookie_id"].map(out["dt_q50"])).abs().groupby(gaps["cookie_id"]).median()
+    )
+    # Regular pacing is the clearest machine tell, so measure dispersion several ways.
+    out["dt_burstiness"] = (out["dt_std"] - out["dt_mean"]) / (
+        out["dt_std"] + out["dt_mean"] + _EPS
+    )
+    out["dt_fano"] = out["dt_std"] ** 2 / (out["dt_mean"] + _EPS)
+    out["dt_rel_iqr"] = out["dt_iqr"] / (out["dt_q50"] + _EPS)
+
+    for threshold in config.FAST_GAP_THRESHOLDS_S:
+        out[f"dt_lt{threshold}"] = (gaps["dt"] < threshold).groupby(
+            gaps["cookie_id"]
+        ).mean()
+
+    bucketed = gaps.assign(bucket=np.floor(np.log1p(gaps["dt"])).astype(int))
+    out["dt_log_entropy"] = _entropy(bucketed, "bucket")
+    out["dt_mode_share"] = (
+        bucketed.groupby(["cookie_id", "bucket"]).size().groupby(level=0).max()
+        / bucketed.groupby("cookie_id").size()
+    )
+
+    lagged = gaps.assign(dt_prev=gaps.groupby("cookie_id")["dt"].shift())
+    out["dt_autocorr1"] = _grouped_corr(lagged, "dt", "dt_prev")
+
+    span = events.groupby("cookie_id")["event_ts"].agg(["min", "max"])
+    out["span_h"] = (span["max"] - span["min"]).dt.total_seconds() / 3600.0
+    out["events_per_h"] = events.groupby("cookie_id").size() / (out["span_h"] + _EPS)
+    return out
+
+
+def _block_sessions(events: pd.DataFrame) -> pd.DataFrame:
+    frame = events[["cookie_id", "event_ts"]].copy()
+    dt = frame.groupby("cookie_id")["event_ts"].diff().dt.total_seconds()
+    frame["new_session"] = dt.isna() | (dt > config.SESSION_GAP_S)
+    frame["session_id"] = frame.groupby("cookie_id")["new_session"].cumsum()
+
+    per_session = frame.groupby(["cookie_id", "session_id"])["event_ts"].agg(
+        ["size", "min", "max"]
+    )
+    per_session["duration_s"] = (
+        per_session["max"] - per_session["min"]
+    ).dt.total_seconds()
+    g = per_session.groupby(level=0)
+
+    out = pd.DataFrame(index=events["cookie_id"].drop_duplicates().sort_values())
+    out["n_sessions"] = g.size()
+    out["sess_events_mean"] = g["size"].mean()
+    out["sess_events_max"] = g["size"].max()
+    out["sess_events_std"] = g["size"].std()
+    out["sess_dur_mean"] = g["duration_s"].mean()
+    out["sess_dur_max"] = g["duration_s"].max()
+    out["sess_rate_mean"] = (
+        per_session["size"] / (per_session["duration_s"] + 1.0)
+    ).groupby(level=0).mean()
+    out["sess_longest_share"] = g["size"].max() / g["size"].sum()
+    out["sess_gap_mean"] = (
+        per_session["min"].groupby(level=0).diff().dt.total_seconds().groupby(level=0).mean()
+    )
+    return out
+
+
+def _block_content(events: pd.DataFrame) -> pd.DataFrame:
+    out = pd.DataFrame(index=events["cookie_id"].drop_duplicates().sort_values())
+    g = events.groupby("cookie_id")
+    for column in ["item_category", "item_location", "item_id", "search_query"]:
+        present = events.dropna(subset=[column])
+        out[f"{column}_nuniq"] = g[column].nunique()
+        out[f"{column}_entropy"] = _entropy(present, column)
+        filled = g[column].count()
+        out[f"{column}_uniq_ratio"] = out[f"{column}_nuniq"] / (filled + _EPS)
+        out[f"{column}_per_event"] = out[f"{column}_nuniq"] / g.size()
+
+    seller = events.dropna(subset=["seller_type"])
+    out["seller_pro_rate"] = (seller["seller_type"] == "pro").groupby(
+        seller["cookie_id"]
+    ).mean()
+    out["seller_known_rate"] = g["seller_type"].count() / g.size()
+
+    items = events.dropna(subset=["item_id"])
+    out["item_repeat_rate"] = 1.0 - out["item_id_nuniq"] / (
+        items.groupby("cookie_id").size() + _EPS
+    )
+    # Scrapers sweep breadth; people re-open the same few listings.
+    out["items_per_category"] = out["item_id_nuniq"] / (out["item_category_nuniq"] + _EPS)
+    out["locations_per_category"] = out["item_location_nuniq"] / (
+        out["item_category_nuniq"] + _EPS
+    )
+    return out
+
+
+def _block_pagination(events: pd.DataFrame) -> pd.DataFrame:
+    out = pd.DataFrame(index=events["cookie_id"].drop_duplicates().sort_values())
+    search = events.dropna(subset=["search_page"]).copy()
+    if search.empty:
+        return out
+    g = search.groupby("cookie_id")
+    out["page_mean"] = g["search_page"].mean()
+    out["page_max"] = g["search_page"].max()
+    out["page_std"] = g["search_page"].std()
+    out["page_first_share"] = (search["search_page"] == 1).groupby(
+        search["cookie_id"]
+    ).mean()
+    out["page_deep_share"] = (search["search_page"] > config.DEEP_PAGE).groupby(
+        search["cookie_id"]
+    ).mean()
+
+    search["step"] = g["search_page"].diff()
+    ascending = search["step"] == 1
+    out["page_step_up_share"] = ascending.groupby(search["cookie_id"]).mean()
+    out["page_step_up_count"] = ascending.groupby(search["cookie_id"]).sum()
+    # Longest strictly consecutive page run = length of the deepest sweep.
+    run_id = (~ascending).groupby(search["cookie_id"]).cumsum()
+    runs = ascending.groupby([search["cookie_id"], run_id]).sum()
+    out["page_run_max"] = runs.groupby(level=0).max()
+
+    out["queries_nuniq"] = g["search_query"].nunique()
+    out["pages_per_query"] = g.size() / (out["queries_nuniq"] + _EPS)
+    out["query_repeat_rate"] = 1.0 - out["queries_nuniq"] / g.size()
+    out["query_len_mean"] = g["search_query"].apply(lambda s: s.str.len().mean())
+    return out
+
+
+def _block_pointer(events: pd.DataFrame) -> pd.DataFrame:
+    out = pd.DataFrame(index=events["cookie_id"].drop_duplicates().sort_values())
+    out["pointer_coverage"] = events.groupby("cookie_id")["pointer_x"].count() / (
+        events.groupby("cookie_id").size()
+    )
+    pointer = events.dropna(subset=["pointer_x", "pointer_y"]).copy()
+    if pointer.empty:
+        return out
+    g = pointer.groupby("cookie_id")
+    out["ptr_x_std"] = g["pointer_x"].std()
+    out["ptr_y_std"] = g["pointer_y"].std()
+    out["ptr_x_mean"] = g["pointer_x"].mean()
+    out["ptr_y_mean"] = g["pointer_y"].mean()
+    out["ptr_bbox"] = (g["pointer_x"].max() - g["pointer_x"].min()) * (
+        g["pointer_y"].max() - g["pointer_y"].min()
+    )
+    out["ptr_uniq_share"] = (
+        pointer.groupby(["cookie_id", "pointer_x", "pointer_y"]).size().groupby(level=0).size()
+        / g.size()
+    )
+
+    pointer["dx"] = g["pointer_x"].diff()
+    pointer["dy"] = g["pointer_y"].diff()
+    pointer["step"] = np.hypot(pointer["dx"], pointer["dy"])
+    pointer["dt"] = g["event_ts"].diff().dt.total_seconds()
+    pointer["speed"] = pointer["step"] / (pointer["dt"] + 1.0)
+    steps = pointer.dropna(subset=["step"]).groupby("cookie_id")
+    out["ptr_step_med"] = steps["step"].median()
+    out["ptr_step_std"] = steps["step"].std()
+    out["ptr_speed_med"] = steps["speed"].median()
+    out["ptr_speed_max"] = steps["speed"].max()
+    out["ptr_step_cv"] = out["ptr_step_std"] / (steps["step"].mean() + _EPS)
+    return out
+
+
+def _block_client(events: pd.DataFrame) -> pd.DataFrame:
+    out = pd.DataFrame(index=events["cookie_id"].drop_duplicates().sort_values())
+    g = events.groupby("cookie_id")
+    n = g.size()
+
+    platform = _share_table(events, "platform", "plat_")
+    platform = platform.reindex(
+        columns=[f"plat_{p}" for p in config.PLATFORMS], fill_value=0.0
+    )
+    out = out.join(platform.div(n, axis=0))
+    out["n_platforms"] = g["platform"].nunique()
+    out["platform_entropy"] = _entropy(events, "platform")
+    out["n_user_agents"] = g["user_agent"].nunique()
+
+    ua = events["user_agent"]
+    out["ua_headless_rate"] = ua.str.contains("Headless").groupby(
+        events["cookie_id"]
+    ).mean()
+    out["ua_mobile_rate"] = ua.str.contains(
+        "Android|iPhone|Mobile", case=False, regex=True
+    ).groupby(events["cookie_id"]).mean()
+    family = ua.str.extract(r"(YaBrowser|HeadlessChrome|Firefox|Chrome|Safari)")[0].fillna(
+        "other"
+    )
+    family_counts = _share_table(events.assign(ua_family=family), "ua_family", "uafam_")
+    out = out.join(family_counts.div(n, axis=0))
+
+    # A rare UA string is itself suspicious, independent of what it claims to be.
+    ua_freq = ua.value_counts()
+    out["ua_freq_min"] = ua.map(ua_freq).groupby(events["cookie_id"]).min()
+    out["ua_freq_mean"] = ua.map(ua_freq).groupby(events["cookie_id"]).mean()
+    return out
+
+
+def _block_cookie_meta(meta: pd.DataFrame) -> pd.DataFrame:
+    out = pd.DataFrame(index=meta["cookie_id"])
+    created = meta["cookie_created_at"].to_numpy()
+    start = meta["window_start_ts"].to_numpy()
+    age_days = (start - created) / np.timedelta64(1, "D")
+    out["cookie_age_days"] = age_days
+    out["cookie_age_log"] = np.log1p(np.clip(age_days, 0, None))
+    out["cookie_created_hour"] = meta["cookie_created_at"].dt.hour.to_numpy()
+    out["cookie_created_dow"] = meta["cookie_created_at"].dt.dayofweek.to_numpy()
+    out["window_dow"] = meta["window_start_ts"].dt.dayofweek.to_numpy()
+    out["window_day_index"] = (
+        (start - start.min()) / np.timedelta64(1, "D")
+    ).astype(float)
+    return out
+
+
+def _block_window_coverage(events: pd.DataFrame, meta: pd.DataFrame) -> pd.DataFrame:
+    bounds = meta.set_index("cookie_id")
+    span = events.groupby("cookie_id")["event_ts"].agg(["min", "max"])
+    out = pd.DataFrame(index=span.index)
+    out["first_event_offset_h"] = (
+        span["min"] - bounds.loc[span.index, "window_start_ts"]
+    ).dt.total_seconds() / 3600.0
+    out["last_event_offset_h"] = (
+        bounds.loc[span.index, "window_end_ts"] - span["max"]
+    ).dt.total_seconds() / 3600.0
+    out["window_coverage"] = (
+        (span["max"] - span["min"]).dt.total_seconds() / 3600.0
+    ) / 24.0
+    return out
+
+
+def _event_documents(events: pd.DataFrame) -> pd.DataFrame:
+    """Two token streams per cookie: pure event order, and order plus pacing."""
+    frame = events[["cookie_id", "event_name", "event_ts"]].copy()
+    frame["code"] = frame["event_name"].map(_EVENT_CODE).astype(str)
+    dt = frame.groupby("cookie_id")["event_ts"].diff().dt.total_seconds()
+    bucket = pd.cut(
+        dt, [-1, 3, 10, 30, 120, np.inf], labels=["0", "1", "2", "3", "4"]
+    ).astype(str)
+    frame["paced"] = frame["code"] + bucket.fillna("s")
+    grouped = frame.groupby("cookie_id")
+    return pd.DataFrame(
+        {
+            "doc_order": grouped["code"].apply(" ".join),
+            "doc_paced": grouped["paced"].apply(" ".join),
+        }
+    )
+
+
+def _block_sequence_svd(
+    events: pd.DataFrame, fit_ids: pd.Index | None
+) -> pd.DataFrame:
+    docs = _event_documents(events)
+    fit_mask = docs.index.isin(fit_ids) if fit_ids is not None else np.ones(len(docs), bool)
+    parts: list[pd.DataFrame] = []
+    specs = [("doc_order", (1, 3), "seqo"), ("doc_paced", (1, 2), "seqp")]
+    for column, ngrams, prefix in specs:
+        vectorizer = TfidfVectorizer(
+            analyzer="word",
+            token_pattern=r"\S+",
+            ngram_range=ngrams,
+            min_df=20,
+            max_features=400,
+            sublinear_tf=True,
+        )
+        matrix = vectorizer.fit_transform(docs.loc[fit_mask, column])
+        svd = TruncatedSVD(
+            n_components=config.SVD_COMPONENTS // 2, random_state=config.SEED
+        )
+        svd.fit(matrix)
+        transformed = svd.transform(vectorizer.transform(docs[column]))
+        parts.append(
+            pd.DataFrame(
+                transformed,
+                index=docs.index,
+                columns=[f"{prefix}_{i}" for i in range(transformed.shape[1])],
+            )
+        )
+    return pd.concat(parts, axis=1)
+
+
+def top_bigrams(events: pd.DataFrame, k: int = config.TOP_BIGRAMS) -> list[str]:
+    seq = events[["cookie_id", "event_name"]].copy()
+    seq["prev"] = seq.groupby("cookie_id", observed=True)["event_name"].shift()
+    pairs = seq.dropna(subset=["prev"])
+    bigrams = pairs["prev"].astype(str) + ">" + pairs["event_name"].astype(str)
+    return bigrams.value_counts().head(k).index.tolist()
+
+
+def build_features(
+    events: pd.DataFrame,
+    meta: pd.DataFrame,
+    fit_ids: pd.Index | None = None,
+    bigrams: list[str] | None = None,
+) -> pd.DataFrame:
+    """Assemble every block for the cookies present in `meta`.
+
+    `fit_ids` restricts unsupervised fitting (TF-IDF/SVD) to those cookies so the
+    representation is learned on train only.
+    """
+    bigrams = bigrams if bigrams is not None else top_bigrams(events)
+    blocks = [
+        _block_volume_and_mix(events),
+        _block_transitions(events, bigrams),
+        _block_timing(events),
+        _block_sessions(events),
+        _block_content(events),
+        _block_pagination(events),
+        _block_pointer(events),
+        _block_client(events),
+        _block_window_coverage(events, meta),
+        _block_sequence_svd(events, fit_ids),
+    ]
+    features = pd.concat(blocks, axis=1)
+    features = features.join(_block_cookie_meta(meta), how="right")
+    return features.loc[meta["cookie_id"]]
