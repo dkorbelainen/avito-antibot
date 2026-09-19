@@ -11,7 +11,7 @@ import pandas as pd
 from sklearn.decomposition import TruncatedSVD
 from sklearn.feature_extraction.text import TfidfVectorizer
 
-from . import config
+from . import config, timeseries
 
 _EPS = 1e-9
 
@@ -108,7 +108,8 @@ def _block_transitions(events: pd.DataFrame, top_bigrams: list[str]) -> pd.DataF
 
     out = pd.DataFrame(index=events["cookie_id"].drop_duplicates().sort_values())
     n_pairs = pairs.groupby("cookie_id").size()
-    out["n_bigrams_uniq"] = pairs.groupby("cookie_id")["bigram"].nunique()
+    # A count is zero when the cookie has no qualifying pair, not unknown.
+    out["n_bigrams_uniq"] = pairs.groupby("cookie_id")["bigram"].nunique().reindex(out.index).fillna(0)
     out["bigram_entropy"] = _entropy(pairs, "bigram")
     out["self_loop_rate"] = (
         (pairs["prev"].astype(str) == pairs["event_name"].astype(str))
@@ -248,7 +249,7 @@ def _block_pagination(events: pd.DataFrame) -> pd.DataFrame:
     search["step"] = g["search_page"].diff()
     ascending = search["step"] == 1
     out["page_step_up_share"] = ascending.groupby(search["cookie_id"]).mean()
-    out["page_step_up_count"] = ascending.groupby(search["cookie_id"]).sum()
+    out["page_step_up_count"] = ascending.groupby(search["cookie_id"]).sum().reindex(out.index).fillna(0)
     # Longest strictly consecutive page run = length of the deepest sweep.
     run_id = (~ascending).groupby(search["cookie_id"]).cumsum()
     runs = ascending.groupby([search["cookie_id"], run_id]).sum()
@@ -398,14 +399,21 @@ def _block_dt_granularity(events: pd.DataFrame) -> pd.DataFrame:
     return out
 
 
-def _block_catalog_shares(events: pd.DataFrame) -> pd.DataFrame:
-    """Per-cookie share of each location / category / query in a fixed vocabulary."""
+def _block_catalog_shares(
+    events: pd.DataFrame, fit_ids: pd.Index | None = None
+) -> pd.DataFrame:
+    """Per-cookie share of each location / category / query in a fixed vocabulary.
+
+    The vocabulary is read off the fitting cookies only; a scored cookie contributes
+    nothing to the choice of columns it is later described by.
+    """
     parts: list[pd.DataFrame] = []
     index = events["cookie_id"].drop_duplicates().sort_values()
     specs = [("item_location", "shloc_", 40), ("item_category", "shcat_", 20), ("search_query", "shq_", 40)]
     for column, prefix, top_k in specs:
         present = events.dropna(subset=[column])
-        keep = present[column].value_counts().head(top_k).index
+        fit_rows = present if fit_ids is None else present[present["cookie_id"].isin(fit_ids)]
+        keep = fit_rows[column].value_counts().head(top_k).index
         subset = present[present[column].isin(keep)]
         table = _share_table(subset, column, prefix)
         totals = present.groupby("cookie_id").size()
@@ -624,20 +632,39 @@ _RELATIVE_BASE = (
 )
 
 
-def _block_relative(matrix: pd.DataFrame) -> pd.DataFrame:
+def _block_relative(
+    matrix: pd.DataFrame, fit_ids: pd.Index | None = None
+) -> pd.DataFrame:
     """Percentile of each core feature among same-platform peers.
 
     Absolute thresholds mean different things on mobile and on web, so a rank inside
     the platform peer group is the comparison a human analyst would actually make.
+    The reference distribution comes from the fitting cookies alone and every cookie is
+    mapped through it, so a scored cookie's percentile does not depend on which other
+    cookies happen to be scored beside it.
+
     The same trick keyed on the window day was tested and rejected: it lifted random
     CV but cost 0.03 P@R70 on the forward-chaining check, because a within-day rank
     encodes that day's population rather than the cookie.
     """
     platform_columns = [f"plat_{p}" for p in config.PLATFORMS]
     dominant = matrix[platform_columns].idxmax(axis=1)
+    fit_mask = (
+        np.ones(len(matrix), bool) if fit_ids is None else matrix.index.isin(fit_ids)
+    )
     out = pd.DataFrame(index=matrix.index)
     for column in (c for c in _RELATIVE_BASE if c in matrix.columns):
-        out[f"rel_plat_{column}"] = matrix[column].groupby(dominant.to_numpy()).rank(pct=True)
+        values = matrix[column].to_numpy(dtype="float64")
+        ranks = np.full(len(matrix), np.nan)
+        for platform in dominant.unique():
+            group = (dominant == platform).to_numpy()
+            reference = np.sort(values[group & fit_mask])
+            reference = reference[~np.isnan(reference)]
+            if reference.size == 0:
+                continue
+            ranks[group] = np.searchsorted(reference, values[group], side="right") / reference.size
+        ranks[np.isnan(values)] = np.nan
+        out[f"rel_plat_{column}"] = ranks
     out["dominant_platform"] = pd.Categorical(dominant).codes
     return out
 
@@ -692,7 +719,12 @@ def _block_sequence_svd(
     return pd.concat(parts, axis=1)
 
 
-def top_bigrams(events: pd.DataFrame, k: int = config.TOP_BIGRAMS) -> list[str]:
+def top_bigrams(
+    events: pd.DataFrame, fit_ids: pd.Index | None = None, k: int = config.TOP_BIGRAMS
+) -> list[str]:
+    """Vocabulary counted on the fitting cookies only, never on the scored ones."""
+    if fit_ids is not None:
+        events = events[events["cookie_id"].isin(fit_ids)]
     seq = events[["cookie_id", "event_name"]].copy()
     seq["prev"] = seq.groupby("cookie_id", observed=True)["event_name"].shift()
     pairs = seq.dropna(subset=["prev"])
@@ -708,10 +740,11 @@ def build_features(
 ) -> pd.DataFrame:
     """Assemble every block for the cookies present in `meta`.
 
-    `fit_ids` restricts unsupervised fitting (TF-IDF/SVD) to those cookies so the
-    representation is learned on train only.
+    `fit_ids` restricts every fitted part — TF-IDF/SVD, the bigram and catalogue
+    vocabularies, the peer-rank reference distributions — to those cookies, so nothing
+    a scored cookie contains can influence how it is described.
     """
-    bigrams = bigrams if bigrams is not None else top_bigrams(events)
+    bigrams = bigrams if bigrams is not None else top_bigrams(events, fit_ids)
     blocks = [
         _block_volume_and_mix(events),
         _block_transitions(events, bigrams),
@@ -723,17 +756,23 @@ def build_features(
         _block_client(events),
         _block_id_structure(events),
         _block_dt_granularity(events),
-        _block_catalog_shares(events),
+        _block_catalog_shares(events, fit_ids),
         _block_conditional_timing(events),
         _block_navigation(events),
         _block_pointer_web(events),
         _block_pointer_deep(events),
-        _scoped_block(events, ("android", "ios"), [_block_timing, _block_navigation], "mob_"),
+        _scoped_block(
+            events,
+            ("android", "ios"),
+            [_block_timing, _block_navigation, timeseries.build_block],
+            "mob_",
+        ),
         _scoped_block(events, ("web", "desktop"), [_block_timing], "web_"),
+        timeseries.build_block(events),
         _block_window_coverage(events, meta),
         _block_sequence_svd(events, fit_ids),
     ]
     features = pd.concat(blocks, axis=1)
     features = features.join(_block_cookie_meta(meta), how="right")
     features = features.loc[meta["cookie_id"]]
-    return pd.concat([features, _block_relative(features)], axis=1)
+    return pd.concat([features, _block_relative(features, fit_ids)], axis=1)

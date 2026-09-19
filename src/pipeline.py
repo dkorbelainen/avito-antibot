@@ -21,9 +21,12 @@ class Dataset:
     test_ids: pd.Index
 
 
+_FEATURE_SOURCES = ("features.py", "timeseries.py")
+
+
 def _feature_code_hash() -> str:
     """Cache key tied to the feature code, so edits can never serve a stale matrix."""
-    source = (config.ROOT / "src" / "features.py").read_bytes()
+    source = b"".join((config.ROOT / "src" / name).read_bytes() for name in _FEATURE_SOURCES)
     return hashlib.sha256(source).hexdigest()[:12]
 
 
