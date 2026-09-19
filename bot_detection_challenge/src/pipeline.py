@@ -45,6 +45,9 @@ def build_dataset(cache: bool = True) -> Dataset:
             matrix.to_parquet(cache_path)
 
     matrix = matrix.astype("float64").replace([np.inf, -np.inf], np.nan)
+    # Some scoped blocks reproduce a global one exactly (the cursor exists only on
+    # web, so webp_* equals ptr_*). Duplicates only dilute column sampling.
+    matrix = matrix.loc[:, ~matrix.T.duplicated().to_numpy()]
     train_ids = pd.Index(train["cookie_id"])
     test_ids = pd.Index(test["cookie_id"])
     day_index = pd.Series(
