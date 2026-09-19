@@ -362,6 +362,229 @@ def _block_window_coverage(events: pd.DataFrame, meta: pd.DataFrame) -> pd.DataF
     return out
 
 
+def _block_id_structure(events: pd.DataFrame) -> pd.DataFrame:
+    """Numeric shape of the visited item id set: sweeps look different from browsing."""
+    out = pd.DataFrame(index=events["cookie_id"].drop_duplicates().sort_values())
+    items = events.dropna(subset=["item_id"]).copy()
+    if items.empty:
+        return out
+    g = items.groupby("cookie_id")
+    out["idst_std"] = g["item_id"].std()
+    out["idst_range"] = g["item_id"].max() - g["item_id"].min()
+    out["idst_iqr"] = g["item_id"].quantile(0.75) - g["item_id"].quantile(0.25)
+    out["idst_median"] = g["item_id"].median()
+    items["step"] = g["item_id"].diff()
+    steps = items.dropna(subset=["step"])
+    out["idst_up_share"] = (steps["step"] > 0).groupby(steps["cookie_id"]).mean()
+    out["idst_step_abs_med"] = steps["step"].abs().groupby(steps["cookie_id"]).median()
+    out["idst_prefix_nuniq"] = (items["item_id"] // 1000).groupby(items["cookie_id"]).nunique()
+    out["idst_range_per_item"] = out["idst_range"] / (g["item_id"].nunique() + _EPS)
+    return out
+
+
+def _block_dt_granularity(events: pd.DataFrame) -> pd.DataFrame:
+    """How many distinct inter-event gaps a cookie produces, and how round they are."""
+    frame = events[["cookie_id", "event_ts"]].copy()
+    frame["dt"] = frame.groupby("cookie_id")["event_ts"].diff().dt.total_seconds()
+    gaps = frame.dropna(subset=["dt"])
+    g = gaps.groupby("cookie_id")
+    out = pd.DataFrame(index=events["cookie_id"].drop_duplicates().sort_values())
+    out["dtg_nuniq"] = g["dt"].nunique()
+    out["dtg_uniq_frac"] = out["dtg_nuniq"] / g.size()
+    for step in (5, 10, 60):
+        out[f"dtg_round{step}"] = (gaps["dt"] % step == 0).groupby(gaps["cookie_id"]).mean()
+    out["dtg_mode_count"] = (
+        gaps.groupby(["cookie_id", "dt"]).size().groupby(level=0).max()
+    )
+    return out
+
+
+def _block_catalog_shares(events: pd.DataFrame) -> pd.DataFrame:
+    """Per-cookie share of each location / category / query in a fixed vocabulary."""
+    parts: list[pd.DataFrame] = []
+    index = events["cookie_id"].drop_duplicates().sort_values()
+    specs = [("item_location", "shloc_", 40), ("item_category", "shcat_", 20), ("search_query", "shq_", 40)]
+    for column, prefix, top_k in specs:
+        present = events.dropna(subset=[column])
+        keep = present[column].value_counts().head(top_k).index
+        subset = present[present[column].isin(keep)]
+        table = _share_table(subset, column, prefix)
+        totals = present.groupby("cookie_id").size()
+        parts.append(table.div(totals, axis=0).reindex(index))
+    return pd.concat(parts, axis=1)
+
+
+def _block_conditional_timing(events: pd.DataFrame) -> pd.DataFrame:
+    """Dwell time after each event type. People linger on a listing; scrapers do not."""
+    frame = events[["cookie_id", "event_name", "event_ts"]].copy()
+    frame["dwell"] = (
+        frame.groupby("cookie_id")["event_ts"].shift(-1) - frame["event_ts"]
+    ).dt.total_seconds()
+    dwell = frame.dropna(subset=["dwell"])
+    out = pd.DataFrame(index=events["cookie_id"].drop_duplicates().sort_values())
+    for name in ("item_view", "search_results_view", "photo_swipe", "seller_page_view"):
+        subset = dwell[dwell["event_name"] == name]
+        if subset.empty:
+            continue
+        g = subset.groupby("cookie_id")["dwell"]
+        out[f"dwell_{name}_med"] = g.median()
+        out[f"dwell_{name}_mean"] = g.mean()
+        out[f"dwell_{name}_std"] = g.std()
+    out["dwell_item_vs_search"] = out.get("dwell_item_view_med", np.nan) / (
+        out.get("dwell_search_results_view_med", np.nan) + _EPS
+    )
+    return out
+
+
+def _block_navigation(events: pd.DataFrame) -> pd.DataFrame:
+    """How often the cookie switches context between consecutive events."""
+    out = pd.DataFrame(index=events["cookie_id"].drop_duplicates().sort_values())
+    for column, prefix in (
+        ("item_category", "nav_cat"),
+        ("item_location", "nav_loc"),
+        ("search_query", "nav_query"),
+    ):
+        present = events.dropna(subset=[column])
+        if present.empty:
+            continue
+        previous = present.groupby("cookie_id")[column].shift()
+        changed = (present[column] != previous).where(previous.notna())
+        valid = changed.dropna()
+        ids = present.loc[valid.index, "cookie_id"]
+        out[f"{prefix}_switch_rate"] = valid.groupby(ids).mean()
+        # Mean run length = how long a cookie stays inside one context before moving on.
+        run_id = valid.astype(bool).groupby(ids).cumsum()
+        runs = valid.groupby([ids, run_id]).size()
+        out[f"{prefix}_run_mean"] = runs.groupby(level=0).mean()
+        out[f"{prefix}_run_max"] = runs.groupby(level=0).max()
+
+    # Funnel: how many listings each search turns into, and how many turn into contact.
+    counts = events.groupby(["cookie_id", "event_name"], observed=True).size().unstack(fill_value=0)
+    counts = counts.reindex(columns=list(config.EVENT_NAMES), fill_value=0)
+    out["funnel_items_per_search"] = counts["item_view"] / (counts["search_results_view"] + 1.0)
+    out["funnel_contact_per_item"] = (
+        counts[list(config.CONTACT_EVENTS)].sum(axis=1) / (counts["item_view"] + 1.0)
+    )
+    out["funnel_seller_per_item"] = counts["seller_page_view"] / (counts["item_view"] + 1.0)
+    out["funnel_swipe_per_item"] = counts["photo_swipe"] / (counts["item_view"] + 1.0)
+
+    # Consecutive photo swipes: a human flips through a gallery, a scraper does not.
+    swipes = events["event_name"].astype(str).eq("photo_swipe")
+    breaks = (~swipes).groupby(events["cookie_id"]).cumsum()
+    runs = swipes.groupby([events["cookie_id"], breaks]).sum()
+    out["swipe_run_max"] = runs.groupby(level=0).max()
+
+    sellers = events.dropna(subset=["item_id"])
+    out["item_revisit_max"] = sellers.groupby(["cookie_id", "item_id"]).size().groupby(level=0).max()
+    return out
+
+
+def _block_pointer_web(events: pd.DataFrame) -> pd.DataFrame:
+    """Pointer statistics restricted to desktop/web, where the field is populated."""
+    web = events[events["platform"].astype(str).isin(("web", "desktop"))]
+    if web.empty:
+        return pd.DataFrame(index=events["cookie_id"].drop_duplicates().sort_values())
+    block = _block_pointer(web)
+    block.columns = [f"webp_{c}" for c in block.columns]
+    return block.reindex(events["cookie_id"].drop_duplicates().sort_values())
+
+
+def _block_pointer_deep(events: pd.DataFrame) -> pd.DataFrame:
+    """Trajectory geometry of the cursor — the single strongest family in ablation."""
+    index = events["cookie_id"].drop_duplicates().sort_values()
+    pointer = events.dropna(subset=["pointer_x", "pointer_y"]).copy()
+    out = pd.DataFrame(index=index)
+    if pointer.empty:
+        return out
+    g = pointer.groupby("cookie_id")
+
+    pointer["dx"] = g["pointer_x"].diff()
+    pointer["dy"] = g["pointer_y"].diff()
+    pointer["step"] = np.hypot(pointer["dx"], pointer["dy"])
+    moves = pointer.dropna(subset=["step"])
+    gm = moves.groupby("cookie_id")
+
+    steps = gm["step"]
+    quantiles = steps.quantile([0.1, 0.5, 0.9]).unstack()
+    quantiles.columns = [f"ptrd_step_q{int(q * 100)}" for q in quantiles.columns]
+    out = out.join(quantiles)
+    bucketed = moves.assign(bucket=np.floor(np.log1p(moves["step"])).astype(int))
+    out["ptrd_step_entropy"] = _entropy(bucketed, "bucket")
+    out["ptrd_zero_step_share"] = (moves["step"] == 0).groupby(moves["cookie_id"]).mean()
+
+    # Straight-line travel is a machine tell: net displacement over path length.
+    net = np.hypot(
+        g["pointer_x"].last() - g["pointer_x"].first(),
+        g["pointer_y"].last() - g["pointer_y"].first(),
+    )
+    out["ptrd_straightness"] = net / (steps.sum() + _EPS)
+    out["ptrd_path_len"] = steps.sum()
+
+    angle = np.arctan2(moves["dy"], moves["dx"])
+    turn = angle.groupby(moves["cookie_id"]).diff().abs()
+    turn = np.minimum(turn, 2 * np.pi - turn).dropna()
+    turn_ids = moves.loc[turn.index, "cookie_id"]
+    out["ptrd_turn_med"] = turn.groupby(turn_ids).median()
+    out["ptrd_turn_std"] = turn.groupby(turn_ids).std()
+    out["ptrd_reversal_share"] = (turn > np.pi / 2).groupby(turn_ids).mean()
+
+    # Synthetic coordinates often snap to a grid or pile up on the screen edges.
+    for axis in ("pointer_x", "pointer_y"):
+        short = axis.split("_")[1]
+        out[f"ptrd_{short}_mod10"] = (pointer[axis] % 10 == 0).groupby(
+            pointer["cookie_id"]
+        ).mean()
+    limits = {"pointer_x": 1920.0, "pointer_y": 1080.0}
+    edge = (
+        (pointer["pointer_x"] <= 1)
+        | (pointer["pointer_y"] <= 1)
+        | (pointer["pointer_x"] >= limits["pointer_x"] - 1)
+        | (pointer["pointer_y"] >= limits["pointer_y"] - 1)
+    )
+    out["ptrd_edge_share"] = edge.groupby(pointer["cookie_id"]).mean()
+
+    centre = np.hypot(
+        pointer["pointer_x"] - limits["pointer_x"] / 2,
+        pointer["pointer_y"] - limits["pointer_y"] / 2,
+    )
+    out["ptrd_centre_dist_med"] = centre.groupby(pointer["cookie_id"]).median()
+    out["ptrd_centre_dist_std"] = centre.groupby(pointer["cookie_id"]).std()
+
+    quadrant = (pointer["pointer_x"] > limits["pointer_x"] / 2).astype(int) * 2 + (
+        pointer["pointer_y"] > limits["pointer_y"] / 2
+    ).astype(int)
+    quad_frame = pointer.assign(quadrant=quadrant)
+    out["ptrd_quadrants"] = quad_frame.groupby("cookie_id")["quadrant"].nunique()
+    out["ptrd_quadrant_entropy"] = _entropy(quad_frame, "quadrant")
+
+    out["ptrd_xy_corr"] = _grouped_corr(pointer, "pointer_x", "pointer_y")
+    out["ptrd_bbox_fill"] = (
+        (g["pointer_x"].max() - g["pointer_x"].min())
+        * (g["pointer_y"].max() - g["pointer_y"].min())
+    ) / (limits["pointer_x"] * limits["pointer_y"])
+    out["ptrd_repeat_share"] = 1.0 - (
+        pointer.groupby(["cookie_id", "pointer_x", "pointer_y"]).size().groupby(level=0).size()
+        / g.size()
+    )
+
+    # Which event types carry a cursor at all, and how fast it moves between them.
+    pointer["dt"] = g["event_ts"].diff().dt.total_seconds()
+    speed = (pointer["step"] / (pointer["dt"] + 1.0)).dropna()
+    speed_ids = pointer.loc[speed.index, "cookie_id"]
+    out["ptrd_speed_q10"] = speed.groupby(speed_ids).quantile(0.1)
+    out["ptrd_speed_q90"] = speed.groupby(speed_ids).quantile(0.9)
+    out["ptrd_speed_std"] = speed.groupby(speed_ids).std()
+    for name in ("item_view", "search_results_view", "photo_swipe"):
+        mask = events["event_name"].astype(str) == name
+        subset = events[mask]
+        if subset.empty:
+            continue
+        out[f"ptrd_cover_{name}"] = (
+            subset.groupby("cookie_id")["pointer_x"].count() / subset.groupby("cookie_id").size()
+        )
+    return out
+
+
 def _event_documents(events: pd.DataFrame) -> pd.DataFrame:
     """Two token streams per cookie: pure event order, and order plus pacing."""
     frame = events[["cookie_id", "event_name", "event_ts"]].copy()
@@ -441,6 +664,13 @@ def build_features(
         _block_pagination(events),
         _block_pointer(events),
         _block_client(events),
+        _block_id_structure(events),
+        _block_dt_granularity(events),
+        _block_catalog_shares(events),
+        _block_conditional_timing(events),
+        _block_navigation(events),
+        _block_pointer_web(events),
+        _block_pointer_deep(events),
         _block_window_coverage(events, meta),
         _block_sequence_svd(events, fit_ids),
     ]

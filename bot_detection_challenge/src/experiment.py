@@ -4,32 +4,11 @@ from __future__ import annotations
 
 import argparse
 
-import lightgbm as lgb
-import numpy as np
-import pandas as pd
 from sklearn.model_selection import StratifiedKFold
 
 from . import config, validate
-from .model import ModelSpec
+from .model import ModelSpec, estimate_rounds
 from .pipeline import build_dataset
-
-
-def estimate_rounds(
-    x: pd.DataFrame, y: pd.Series, params: dict[str, object], max_rounds: int = 3000
-) -> int:
-    """Best iteration averaged over folds, used as the fixed round count later."""
-    best: list[int] = []
-    splitter = StratifiedKFold(config.N_FOLDS, shuffle=True, random_state=config.SEED)
-    for train_idx, valid_idx in splitter.split(x, y):
-        booster = lgb.train(
-            {**params, "seed": config.SEED, "metric": "average_precision"},
-            lgb.Dataset(x.iloc[train_idx], y.iloc[train_idx]),
-            num_boost_round=max_rounds,
-            valid_sets=[lgb.Dataset(x.iloc[valid_idx], y.iloc[valid_idx])],
-            callbacks=[lgb.early_stopping(150, verbose=False)],
-        )
-        best.append(booster.best_iteration)
-    return int(np.median(best))
 
 
 def main() -> None:
@@ -48,7 +27,10 @@ def main() -> None:
     if args.features:
         x = x.filter(regex=args.features)
 
-    rounds = args.rounds or estimate_rounds(x, y, ModelSpec(args.kind).resolved(config.SEED))
+    folds = list(
+        StratifiedKFold(config.N_FOLDS, shuffle=True, random_state=config.SEED).split(x, y)
+    )
+    rounds = args.rounds or estimate_rounds(args.kind, x, y, folds)
     spec = ModelSpec(kind=args.kind, n_rounds=rounds)
 
     report = validate.repeated_cv(spec, x, y, n_seeds=args.seeds)

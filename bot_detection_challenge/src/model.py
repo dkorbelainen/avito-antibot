@@ -117,3 +117,55 @@ def rank_average(predictions: list[np.ndarray], weights: list[float] | None = No
         ranks = pd.Series(pred).rank(pct=True).to_numpy()
         stacked += weight * ranks
     return stacked / total
+
+
+def estimate_rounds(
+    kind: Kind,
+    x: pd.DataFrame,
+    y: pd.Series,
+    folds: list[tuple[np.ndarray, np.ndarray]],
+    max_rounds: int = 4000,
+    patience: int = 150,
+    seed: int = config.SEED,
+) -> int:
+    """Median best iteration across folds, early-stopped on PR-AUC."""
+    spec = ModelSpec(kind=kind)
+    params = spec.resolved(seed)
+    best: list[int] = []
+    for train_idx, valid_idx in folds:
+        x_tr, y_tr = x.iloc[train_idx], y.iloc[train_idx]
+        x_va, y_va = x.iloc[valid_idx], y.iloc[valid_idx]
+        if kind == "lgb":
+            import lightgbm as lgb
+
+            booster = lgb.train(
+                {**params, "metric": "average_precision"},
+                lgb.Dataset(x_tr, y_tr),
+                num_boost_round=max_rounds,
+                valid_sets=[lgb.Dataset(x_va, y_va)],
+                callbacks=[lgb.early_stopping(patience, verbose=False)],
+            )
+            best.append(booster.best_iteration)
+        elif kind == "cat":
+            from catboost import CatBoostClassifier
+
+            model = CatBoostClassifier(
+                iterations=max_rounds, eval_metric="PRAUC", **params
+            )
+            model.fit(x_tr, y_tr, eval_set=(x_va, y_va), early_stopping_rounds=patience)
+            best.append(int(model.get_best_iteration()) + 1)
+        else:
+            import xgboost as xgb
+
+            evals_result: dict = {}
+            booster = xgb.train(
+                {**params, "eval_metric": "aucpr"},
+                xgb.DMatrix(x_tr, label=y_tr),
+                num_boost_round=max_rounds,
+                evals=[(xgb.DMatrix(x_va, label=y_va), "valid")],
+                early_stopping_rounds=patience,
+                evals_result=evals_result,
+                verbose_eval=False,
+            )
+            best.append(int(booster.best_iteration) + 1)
+    return int(np.median(best))

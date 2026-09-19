@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 from dataclasses import dataclass
 
 import numpy as np
@@ -20,8 +21,14 @@ class Dataset:
     test_ids: pd.Index
 
 
+def _feature_code_hash() -> str:
+    """Cache key tied to the feature code, so edits can never serve a stale matrix."""
+    source = (config.ROOT / "src" / "features.py").read_bytes()
+    return hashlib.sha256(source).hexdigest()[:12]
+
+
 def build_dataset(cache: bool = True) -> Dataset:
-    cache_path = config.CACHE_DIR / "features.parquet"
+    cache_path = config.CACHE_DIR / f"features_{_feature_code_hash()}.parquet"
     train, test = data.load_splits()
     meta = pd.concat([train.drop(columns=["target"]), test], ignore_index=True)
 
@@ -37,7 +44,7 @@ def build_dataset(cache: bool = True) -> Dataset:
             config.CACHE_DIR.mkdir(exist_ok=True)
             matrix.to_parquet(cache_path)
 
-    matrix = matrix.replace([np.inf, -np.inf], np.nan)
+    matrix = matrix.astype("float64").replace([np.inf, -np.inf], np.nan)
     train_ids = pd.Index(train["cookie_id"])
     test_ids = pd.Index(test["cookie_id"])
     day_index = pd.Series(
