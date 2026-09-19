@@ -4,7 +4,6 @@ notes/
 *.plan.md
 NOTES.md
 PLAN.md
-JOURNAL.md
 
 # jupyter
 .ipynb_checkpoints/
@@ -28,6 +27,3 @@ artifacts/
 *.pkl
 *.joblib
 *.log
-
-# temporary compatibility symlink for jobs started before the move
-/bot_detection_challenge

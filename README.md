@@ -1,72 +1,99 @@
-# Bot detection
+# Детектирование ботов
 
-Scores each `cookie_id` in `data/test.csv` between 0 and 1 for belonging to
-automated data-collection traffic. Metric: precision at recall >= 0.70, computed with `metric.py`.
+Каждой куке из `data/test.csv` ставится оценка от 0 до 1 — вероятность принадлежать
+трафику сервисов автоматического сбора данных. Метрика — precision при recall ≥ 0.70,
+считается кодом из `metric.py`.
 
-## Running it
+## Запуск
 
 ```bash
 pip install -r requirements.txt          # Python 3.14.7
 jupyter nbconvert --execute --inplace solution.ipynb
 ```
 
-`solution.ipynb` is the deliverable: it loads the data, builds the features, reproduces
-the baseline and the final model, and writes `submission.csv`. Every seed is fixed, so a
-second run produces a byte-identical file — the notebook and the command below both
-write md5 `8c043f2e2ed5219ca600240ce99e6c47`.
+`solution.ipynb` — основной результат: загружает данные, строит признаки, воспроизводит
+baseline и финальную модель, пишет `submission.csv`.
 
-The same result without a notebook:
+То же самое без ноутбука:
 
 ```bash
-python -m src.submit --name final
+python -m src.submit --name final_pct
 ```
 
-A first run takes about 25 minutes: building the 468 features from the event log is a
-few minutes, the rest is cross-validation. Feature matrices are cached under
-`artifacts/` keyed by a hash of the feature code, so edits can never serve a stale
-matrix and reruns are fast.
+Все сиды зафиксированы. Оба способа дают побайтово одинаковый файл, md5
+`ffb2ec0bfa42d1c1256bdcb5d149132a`. Проверено и на пустом `artifacts/`, когда все
+признаки собираются с нуля из лога событий.
 
-## Layout
+Первый запуск занимает около 25 минут: сборка 479 признаков — несколько минут,
+остальное кросс-валидация. Матрицы признаков кешируются в `artifacts/` по хешу кода
+признаков, поэтому устаревшая матрица подставиться не может, а повторные запуски быстрые.
 
-| path | role |
+## Результат
+
+| | baseline | финальная модель |
+|---|---|---|
+| признаков | 47 | 479 |
+| P@R70 | 0.7446 | **0.8894 ±0.0025** |
+| ROC-AUC | 0.9273 | 0.9510 |
+| PR-AUC | 0.7757 | 0.8363 |
+| recall при FPR 1 % | 0.6211 | 0.7359 |
+
+Модель — один LightGBM, обученный под 10 сидами с усреднением в ранговом пространстве.
+
+## Как проверялись решения
+
+Целевая метрика шумная: на выборке с 899 позитивами это одна точка PR-кривой, разброс
+по дням доходит до 0.15 при стабильном ROC-AUC. Поэтому оптимизация шла по PR-AUC, а
+каждое изменение проверялось тремя протоколами сразу:
+
+1. **Случайный K-fold**, 5 фолдов × 5 сидов — основной.
+2. **Forward-chaining по дням** — обучение на днях до `k`, проверка на дне `k`. Ловит
+   признаки, описывающие популяцию конкретного дня.
+3. **`src.strict`** — матрица признаков пересобирается заново только по дням до среза.
+   Отличие от второго принципиальное: forward-chaining режет матрицу, построенную один
+   раз по всему train, поэтому словари и популяционные статистики в нём посчитаны с
+   участием будущих дней.
+
+Третий протокол пришлось добавить по ходу работы, и он поймал дефект, который первые два
+пропустили: признак, дававший +0.110 P@R70 по случайному CV, давал +0.028 по строгому.
+Разбор — в журнале, раздел F38.
+
+## Журнал
+
+[`JOURNAL.md`](JOURNAL.md) — полный лог: что пробовали, что получилось, что отвергли и
+почему. Машиночитаемый близнец — `results.jsonl`, туда пишет каждый прогон.
+Отвергнутого там больше, чем принятого: ансамбль трёх семейств, подбор
+гиперпараметров, отдельная модель для мобильного трафика, target encoding, веса по
+свежести, псевдоразметка — всё измерено на том же протоколе и откачено.
+
+## Структура
+
+| путь | назначение |
 |---|---|
-| `solution.ipynb` | the narrated end-to-end run |
-| `src/config.py` | paths, seeds, constants |
-| `src/data.py` | loading, platform normalisation, the window filter |
-| `src/features.py` | all feature blocks |
-| `src/timeseries.py` | the event stream as a point process: binned activity, compression, circular time |
-| `src/encoding.py` | fold-safe target encoding of the raw categorical keys (measured, rejected) |
-| `src/pipeline.py` | dataset assembly and caching, submission writing |
-| `src/model.py` | LightGBM / CatBoost / XGBoost behind one interface, rank blending |
-| `src/validate.py` | repeated CV, forward chaining, scoring with `metric.py` |
-| `src/experiment.py` | CLI for a single named experiment |
-| `src/ablation.py` | leave-one-block-out over the feature families |
-| `src/diagnose.py` | metrics split by cookie regime |
-| `src/tune.py` | Optuna search, half the objective earned on forward-looking splits |
-| `src/ensemble.py` | every subset of the three model families, weights searched on OOF |
-| `src/mobile.py` | mobile specialist and two ways of folding it in (measured, rejected) |
-| `src/submit.py` | final fit, seed bagging, `submission.csv` |
-| `src/report.py` | renders `results.jsonl` as the experiment table |
-| `tools/make_notebook.py` | generates `solution.ipynb` |
-| `results.jsonl` | every experiment that was run, with its scores |
+| `solution.ipynb` | основной прогон с пояснениями |
+| `JOURNAL.md` | журнал экспериментов |
+| `src/config.py` | пути, сиды, константы |
+| `src/data.py` | загрузка, нормализация платформ, фильтр окна наблюдения |
+| `src/features.py` | все блоки признаков |
+| `src/timeseries.py` | поток событий как точечный процесс |
+| `src/pipeline.py` | сборка и кеширование матрицы, запись ответа |
+| `src/model.py` | LightGBM / CatBoost / XGBoost за одним интерфейсом |
+| `src/validate.py` | метрики, OOF, forward-chaining |
+| `src/strict.py` | строгий протокол с пересборкой признаков |
+| `src/experiment.py` | запуск одного эксперимента, дописывает `results.jsonl` |
+| `src/ablation.py` | leave-one-block-out по 22 семействам признаков |
+| `src/ensemble.py` | сравнение семейств моделей и поиск весов |
+| `src/diagnose.py` | метрики в разрезе подгрупп |
+| `src/tune.py` | подбор гиперпараметров (измерен, отвергнут) |
+| `src/encoding.py` | target encoding категориальных ключей (измерен, отвергнут) |
+| `src/mobile.py` | специалист по мобильному трафику (измерен, отвергнут) |
+| `src/submit.py` | финальное обучение и запись `submission.csv` |
+| `tools/make_notebook.py` | генератор `solution.ipynb` |
+| `tools/snapshot.py` | архивация кандидатов на отправку |
 
-## Method in one paragraph
+## Использованное
 
-Events are clipped to each cookie's observation window — 12.4% of the raw rows are
-timestamped after `window_end_ts` and would not be available at scoring time. From the
-surviving events, 457 features are built in 16 families covering event volume and mix,
-transition bigrams, the micro-structure of inter-event gaps, session shape, content
-diversity, pagination sweeps, cursor trajectory geometry, platform and User-Agent,
-dwell times, context switching, catalogue profile, item-id structure, sequence n-grams, the event stream seen as a point process,
-percentile ranks within the cookie's own platform, and the event stream described as a
-point process. The shipped model is a single LightGBM bagged over ten seeds in rank
-space: a blend of three gradient boosting families was measured on identical folds and
-the weight search gave CatBoost and XGBoost zero weight, and two Optuna searches both
-lost to the hand-set parameters. Decisions are made on repeated stratified CV over the
-whole training set, cross-checked against day-by-day forward chaining; a change is kept
-only when PR-AUC rises and neither P@R70 nor the forward-chaining score falls.
-
-## Third-party components
-
-pandas, numpy, scikit-learn, LightGBM, CatBoost, XGBoost, Optuna, matplotlib — all
-open source, all run locally. No external APIs and no language models are used.
+Python 3.14.7, версии библиотек — в `requirements.txt`. Из готовых решений —
+только общедоступные библиотеки: pandas, numpy, scikit-learn (TF-IDF, TruncatedSVD,
+StratifiedKFold, isotonic regression), LightGBM, CatBoost, XGBoost, Optuna, matplotlib.
+Предобученные модели и внешние API не используются.
