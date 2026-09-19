@@ -86,7 +86,7 @@ def _block_volume_and_mix(events: pd.DataFrame) -> pd.DataFrame:
     )
     out["ratio_photo_item"] = counts["cnt_photo_swipe"] / (counts["cnt_item_view"] + 1.0)
     out["ratio_contact_seller"] = out["rate_contact"] / (
-        rates["rate_seller_page_view"] + _EPS
+        rates["rate_seller_page_view"] + 0.01
     )
 
     hours = events.assign(hour=events["event_ts"].dt.hour)
@@ -137,16 +137,16 @@ def _block_timing(events: pd.DataFrame) -> pd.DataFrame:
     out["dt_mean"] = g["dt"].mean()
     out["dt_std"] = g["dt"].std()
     out["dt_iqr"] = out["dt_q75"] - out["dt_q25"]
-    out["dt_cv"] = out["dt_std"] / (out["dt_mean"] + _EPS)
+    out["dt_cv"] = out["dt_std"] / (out["dt_mean"] + 1.0)
     out["dt_mad"] = (
         (gaps["dt"] - gaps["cookie_id"].map(out["dt_q50"])).abs().groupby(gaps["cookie_id"]).median()
     )
     # Regular pacing is the clearest machine tell, so measure dispersion several ways.
     out["dt_burstiness"] = (out["dt_std"] - out["dt_mean"]) / (
-        out["dt_std"] + out["dt_mean"] + _EPS
+        out["dt_std"] + out["dt_mean"] + 1.0
     )
-    out["dt_fano"] = out["dt_std"] ** 2 / (out["dt_mean"] + _EPS)
-    out["dt_rel_iqr"] = out["dt_iqr"] / (out["dt_q50"] + _EPS)
+    out["dt_fano"] = out["dt_std"] ** 2 / (out["dt_mean"] + 1.0)
+    out["dt_rel_iqr"] = out["dt_iqr"] / (out["dt_q50"] + 1.0)
 
     for threshold in config.FAST_GAP_THRESHOLDS_S:
         out[f"dt_lt{threshold}"] = (gaps["dt"] < threshold).groupby(
@@ -165,7 +165,7 @@ def _block_timing(events: pd.DataFrame) -> pd.DataFrame:
 
     span = events.groupby("cookie_id")["event_ts"].agg(["min", "max"])
     out["span_h"] = (span["max"] - span["min"]).dt.total_seconds() / 3600.0
-    out["events_per_h"] = events.groupby("cookie_id").size() / (out["span_h"] + _EPS)
+    out["events_per_h"] = events.groupby("cookie_id").size() / out["span_h"].clip(lower=1 / 60)
     return out
 
 
@@ -208,7 +208,7 @@ def _block_content(events: pd.DataFrame) -> pd.DataFrame:
         out[f"{column}_nuniq"] = g[column].nunique()
         out[f"{column}_entropy"] = _entropy(present, column)
         filled = g[column].count()
-        out[f"{column}_uniq_ratio"] = out[f"{column}_nuniq"] / (filled + _EPS)
+        out[f"{column}_uniq_ratio"] = out[f"{column}_nuniq"] / (filled + 1.0)
         out[f"{column}_per_event"] = out[f"{column}_nuniq"] / g.size()
 
     seller = events.dropna(subset=["seller_type"])
@@ -219,12 +219,12 @@ def _block_content(events: pd.DataFrame) -> pd.DataFrame:
 
     items = events.dropna(subset=["item_id"])
     out["item_repeat_rate"] = 1.0 - out["item_id_nuniq"] / (
-        items.groupby("cookie_id").size() + _EPS
+        items.groupby("cookie_id").size() + 1.0
     )
     # Scrapers sweep breadth; people re-open the same few listings.
-    out["items_per_category"] = out["item_id_nuniq"] / (out["item_category_nuniq"] + _EPS)
+    out["items_per_category"] = out["item_id_nuniq"] / (out["item_category_nuniq"] + 1.0)
     out["locations_per_category"] = out["item_location_nuniq"] / (
-        out["item_category_nuniq"] + _EPS
+        out["item_category_nuniq"] + 1.0
     )
     return out
 
@@ -255,7 +255,7 @@ def _block_pagination(events: pd.DataFrame) -> pd.DataFrame:
     out["page_run_max"] = runs.groupby(level=0).max()
 
     out["queries_nuniq"] = g["search_query"].nunique()
-    out["pages_per_query"] = g.size() / (out["queries_nuniq"] + _EPS)
+    out["pages_per_query"] = g.size() / (out["queries_nuniq"] + 1.0)
     out["query_repeat_rate"] = 1.0 - out["queries_nuniq"] / g.size()
     out["query_len_mean"] = g["search_query"].apply(lambda s: s.str.len().mean())
     return out
@@ -292,7 +292,7 @@ def _block_pointer(events: pd.DataFrame) -> pd.DataFrame:
     out["ptr_step_std"] = steps["step"].std()
     out["ptr_speed_med"] = steps["speed"].median()
     out["ptr_speed_max"] = steps["speed"].max()
-    out["ptr_step_cv"] = out["ptr_step_std"] / (steps["step"].mean() + _EPS)
+    out["ptr_step_cv"] = out["ptr_step_std"] / (steps["step"].mean() + 1.0)
     return out
 
 
@@ -378,7 +378,7 @@ def _block_id_structure(events: pd.DataFrame) -> pd.DataFrame:
     out["idst_up_share"] = (steps["step"] > 0).groupby(steps["cookie_id"]).mean()
     out["idst_step_abs_med"] = steps["step"].abs().groupby(steps["cookie_id"]).median()
     out["idst_prefix_nuniq"] = (items["item_id"] // 1000).groupby(items["cookie_id"]).nunique()
-    out["idst_range_per_item"] = out["idst_range"] / (g["item_id"].nunique() + _EPS)
+    out["idst_range_per_item"] = out["idst_range"] / (g["item_id"].nunique() + 1.0)
     return out
 
 
@@ -431,7 +431,7 @@ def _block_conditional_timing(events: pd.DataFrame) -> pd.DataFrame:
         out[f"dwell_{name}_mean"] = g.mean()
         out[f"dwell_{name}_std"] = g.std()
     out["dwell_item_vs_search"] = out.get("dwell_item_view_med", np.nan) / (
-        out.get("dwell_search_results_view_med", np.nan) + _EPS
+        out.get("dwell_search_results_view_med", np.nan) + 1.0
     )
     return out
 
@@ -479,14 +479,29 @@ def _block_navigation(events: pd.DataFrame) -> pd.DataFrame:
     return out
 
 
+def _scoped_block(
+    events: pd.DataFrame,
+    platforms: tuple[str, ...],
+    builders: list,
+    prefix: str,
+) -> pd.DataFrame:
+    """Recompute a set of blocks on one platform family only.
+
+    Platform families differ in which fields they populate, so a cookie's timing and
+    navigation on mobile are a different measurement from the same statistics on web.
+    """
+    index = events["cookie_id"].drop_duplicates().sort_values()
+    subset = events[events["platform"].astype(str).isin(platforms)]
+    if subset.empty:
+        return pd.DataFrame(index=index)
+    frame = pd.concat([build(subset) for build in builders], axis=1)
+    frame.columns = [f"{prefix}{c}" for c in frame.columns]
+    return frame.reindex(index)
+
+
 def _block_pointer_web(events: pd.DataFrame) -> pd.DataFrame:
     """Pointer statistics restricted to desktop/web, where the field is populated."""
-    web = events[events["platform"].astype(str).isin(("web", "desktop"))]
-    if web.empty:
-        return pd.DataFrame(index=events["cookie_id"].drop_duplicates().sort_values())
-    block = _block_pointer(web)
-    block.columns = [f"webp_{c}" for c in block.columns]
-    return block.reindex(events["cookie_id"].drop_duplicates().sort_values())
+    return _scoped_block(events, ("web", "desktop"), [_block_pointer], "webp_")
 
 
 def _block_pointer_deep(events: pd.DataFrame) -> pd.DataFrame:
@@ -517,7 +532,7 @@ def _block_pointer_deep(events: pd.DataFrame) -> pd.DataFrame:
         g["pointer_x"].last() - g["pointer_x"].first(),
         g["pointer_y"].last() - g["pointer_y"].first(),
     )
-    out["ptrd_straightness"] = net / (steps.sum() + _EPS)
+    out["ptrd_straightness"] = net / (steps.sum() + 1.0)
     out["ptrd_path_len"] = steps.sum()
 
     angle = np.arctan2(moves["dy"], moves["dx"])
@@ -582,6 +597,52 @@ def _block_pointer_deep(events: pd.DataFrame) -> pd.DataFrame:
         out[f"ptrd_cover_{name}"] = (
             subset.groupby("cookie_id")["pointer_x"].count() / subset.groupby("cookie_id").size()
         )
+    return out
+
+
+# Features worth judging relative to peers rather than on an absolute scale.
+_RELATIVE_BASE = (
+    "n_events",
+    "dt_q50",
+    "dt_iqr",
+    "dtg_uniq_frac",
+    "sess_events_mean",
+    "item_location_nuniq",
+    "item_category_nuniq",
+    "item_id_nuniq",
+    "page_mean",
+    "page_max",
+    "rate_item_view",
+    "rate_engagement",
+    "funnel_items_per_search",
+    "webp_pointer_coverage",
+    "nav_loc_switch_rate",
+    "dwell_item_view_med",
+    "ptrd_straightness",
+    "events_per_h",
+    "idst_range",
+    "ua_freq_mean",
+)
+
+
+def _block_relative(matrix: pd.DataFrame, meta: pd.DataFrame) -> pd.DataFrame:
+    """Percentile of each core feature among same-day and same-platform peers.
+
+    Absolute thresholds drift between days and between platforms; a rank inside the
+    peer group is the comparison a human analyst would actually make.
+    """
+    aligned = meta.set_index("cookie_id").loc[matrix.index]
+    day = aligned["window_start_ts"].dt.normalize()
+    platform_columns = [f"plat_{p}" for p in config.PLATFORMS]
+    dominant = matrix[platform_columns].idxmax(axis=1)
+
+    out = pd.DataFrame(index=matrix.index)
+    available = [c for c in _RELATIVE_BASE if c in matrix.columns]
+    for column in available:
+        values = matrix[column]
+        out[f"rel_day_{column}"] = values.groupby(day.to_numpy()).rank(pct=True)
+        out[f"rel_plat_{column}"] = values.groupby(dominant.to_numpy()).rank(pct=True)
+    out["dominant_platform"] = pd.Categorical(dominant).codes
     return out
 
 
@@ -671,9 +732,12 @@ def build_features(
         _block_navigation(events),
         _block_pointer_web(events),
         _block_pointer_deep(events),
+        _scoped_block(events, ("android", "ios"), [_block_timing, _block_navigation], "mob_"),
+        _scoped_block(events, ("web", "desktop"), [_block_timing], "web_"),
         _block_window_coverage(events, meta),
         _block_sequence_svd(events, fit_ids),
     ]
     features = pd.concat(blocks, axis=1)
     features = features.join(_block_cookie_meta(meta), how="right")
-    return features.loc[meta["cookie_id"]]
+    features = features.loc[meta["cookie_id"]]
+    return pd.concat([features, _block_relative(features, meta)], axis=1)
