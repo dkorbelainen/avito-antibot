@@ -657,8 +657,13 @@ What none of this can rule out: a collector active in the test week whose profil
 absent from the training weeks. Nothing in the data answers that, and no validation
 scheme can.
 
-### F43 — the families make the same mistakes, measured properly this time
-The weight search gave LightGBM 1.00 again on the 479-column set. To check the verdict
+### F43 — the families make the same mistakes
+The weight search gives LightGBM 1.00 on the 479-column set. Out of fold, five folds by
+five seeds: LightGBM 0.8894 P@R70 / 0.8363 PR-AUC, XGBoost 0.8802 / 0.8274, CatBoost
+0.8762 / 0.8193; blended in rank space the best subset is LightGBM alone at 0.8911 /
+0.8404.
+
+These numbers replace an earlier reading that was taken on a stale cache — see F50. To check the verdict
 is not an artefact of a grid in fifths, the lgb/xgb blend was swept in twentieths:
 PR-AUC falls monotonically from 0.8347 at weight 0 to 0.8288 at weight 1, with no local
 maximum anywhere. P@R70 peaks at weight 0.10 (0.8862 against 0.8850), which is a
@@ -766,3 +771,20 @@ training set and differs only in the model. The test-time bag therefore carries 
 diversity per seed than this curve suggests. It does not change the conclusion — the
 curve is flat from seed five onward by every metric — but it is the reason for keeping
 ten rather than trimming to five.
+
+### F50 — a cache keyed on the column count served a stale model for two experiments
+`src/ensemble.py` named its out-of-fold cache
+`oof_{kind}_{tag}_{seeds}seeds_{n_columns}f.npy`. Rewriting the popularity block from a
+count to a percentile did not change the width — 479 columns before and after — so the
+name collided and every later call loaded arrays produced by the previous model. The
+cached LightGBM array scored 0.8850 P@R70 / 0.8347 PR-AUC against 0.8911 / 0.8404 for
+the real one, with Spearman 0.9677 between them: a different ranking, not a noisy copy.
+
+Reach of the defect: the family comparison in F43 and the two notebook sections that
+read those arrays. Not the shipped model, not `submission.csv`, and not any number from
+`src.experiment` or `src.strict` — `src/submit.py` imports `config`, `validate`, `model`
+and `pipeline`, and never touches the ensemble module.
+
+Fixed by putting the feature-code hash in the cache name, the same hash that already
+guards the feature matrix in `src/pipeline.py`. The column count is not a safe key: a
+block can be rewritten without changing the width.

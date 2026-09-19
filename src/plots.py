@@ -154,7 +154,9 @@ def progression(frame: pd.DataFrame):
     for xi, value in zip(x, frame["P@R70"], strict=True):
         ax.annotate(f"{value:.3f}", (xi, value), textcoords="offset points",
                     xytext=(0, 9), ha="center", fontsize=8.5, color=INK)
-    ax.set_xticks(x, frame["experiment"], rotation=30, ha="right")
+    # Читаемая подпись шага, если она есть; иначе имя прогона.
+    labels = frame["шаг"] if "шаг" in frame.columns else frame["experiment"]
+    ax.set_xticks(x, labels, rotation=30, ha="right")
     ax.set_ylabel("P@R70")
     ax.set_title("История экспериментов")
     ax.yaxis.grid(True)
@@ -184,7 +186,7 @@ def pr_curve(y_true, scores, target_recall: float = 0.70):
     )
     ax.set_xlabel("recall")
     ax.set_ylabel("precision")
-    ax.set_title("PR-кривая OOF; зелёная зона — допустимые пороги (recall ≥ 0.70)")
+    ax.set_title("PR-кривая OOF, зелёная зона — допустимые пороги")
     ax.set_xlim(0, 1)
     ax.set_ylim(0, 1.02)
     ax.grid(True)

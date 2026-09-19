@@ -41,6 +41,11 @@ python tools/check_submission.py
 
 Модель — LightGBM, обученный под 10 сидами с усреднением в ранговом пространстве.
 
+![PR-кривая](assets/pr_curve.png)
+
+Зелёная зона — пороги, которые метрика вообще рассматривает. P@R70 — максимум precision
+внутри неё, то есть одна точка кривой; отсюда и её шумность.
+
 ### Как проверялись решения
 
 Целевая метрика шумная: на выборке с 899 позитивами это одна точка PR-кривой, разброс
@@ -100,6 +105,7 @@ python tools/check_submission.py
 | `tools/make_notebook.py` | генератор `solution.ipynb` |
 | `tools/snapshot.py` | архивация кандидатов на отправку |
 | `tools/check_submission.py` | проверки формата `submission.csv` |
+| `tools/make_figures.py` | картинки для README |
 
 </details>
 
