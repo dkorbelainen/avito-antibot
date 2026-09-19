@@ -24,6 +24,12 @@ python -m src.submit --name final_pct
 `ffb2ec0bfa42d1c1256bdcb5d149132a`. Проверено и на пустом `artifacts/`, когда все
 признаки собираются с нуля из лога событий.
 
+Проверить формат готового файла:
+
+```bash
+python tools/check_submission.py
+```
+
 Первый запуск занимает около 25 минут: сборка 479 признаков — несколько минут,
 остальное кросс-валидация. Матрицы признаков кешируются в `artifacts/` по хешу кода
 признаков, поэтому устаревшая матрица подставиться не может, а повторные запуски быстрые.
@@ -90,6 +96,7 @@ python -m src.submit --name final_pct
 | `src/submit.py` | финальное обучение и запись `submission.csv` |
 | `tools/make_notebook.py` | генератор `solution.ipynb` |
 | `tools/snapshot.py` | архивация кандидатов на отправку |
+| `tools/check_submission.py` | проверки формата `submission.csv` |
 
 ## Использованное
 
