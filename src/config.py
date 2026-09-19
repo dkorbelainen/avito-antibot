@@ -11,7 +11,7 @@ TRAIN_PATH = DATA_DIR / "train.csv"
 TEST_PATH = DATA_DIR / "test.csv"
 SAMPLE_SUBMISSION_PATH = ROOT / "sample_submission.csv"
 SUBMISSION_PATH = ROOT / "submission.csv"
-RESULTS_PATH = ROOT / "results.jsonl"
+RESULTS_PATH = ROOT / "logs" / "results.jsonl"
 CACHE_DIR = ROOT / "artifacts"
 
 SEED = 42

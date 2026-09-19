@@ -2,7 +2,7 @@
 
 Running log of what was tried, what it scored, and what it taught us.
 Source of truth for the "what we tried" narrative in `solution.ipynb`.
-Machine-readable twin: `results.jsonl`.
+Machine-readable twin: `logs/results.jsonl`.
 
 Metric: `P@R70` from the official `metric.py`. Validation: RepeatedStratifiedKFold
 5 folds x 5 seeds over the full train, unless noted.
@@ -742,3 +742,27 @@ four folds and applied to the fifth. Isotonic costs 0.0025 P@R70 and 0.0046 PR-A
 Platt scaling costs 0.16 P@R70, because a two-parameter sigmoid flattens the top of the
 ranking where the metric lives. The three cells are already placed correctly against
 each other.
+
+### F49 — seed bagging saturates around five seeds; twenty is not better than ten
+Twenty independent out-of-fold runs, each five folds, blended cumulatively in rank space:
+
+| seeds | P@R70 | ROC-AUC | PR-AUC | R@FPR1% |
+|---|---|---|---|---|
+| 1 | 0.8861 | 0.9516 | 0.8394 | 0.7341 |
+| 2 | 0.8911 | 0.9527 | **0.8410** | 0.7386 |
+| 5 | 0.8911 | 0.9529 | 0.8404 | **0.7486** |
+| 10 | 0.8892 | 0.9531 | 0.8400 | 0.7475 |
+| 20 | 0.8898 | 0.9530 | 0.8395 | 0.7464 |
+
+Single seeds spread 0.8788..0.8930 P@R70 and 0.8301..0.8394 PR-AUC, and averaging
+removes that spread almost entirely by the second seed. Past five there is no measurable
+gain: PR-AUC drifts down by 0.0009 between 5 and 20, which is a third of the
+seed-to-seed standard deviation. `BAG_SEEDS` stays at 10 — comfortably past saturation,
+and the shipped scores are produced once so the extra five cost nothing.
+
+One caveat on reading this curve: it blends out-of-fold predictions, where the seeds
+differ in both the fold split and the model, while the shipped bag refits on the whole
+training set and differs only in the model. The test-time bag therefore carries less
+diversity per seed than this curve suggests. It does not change the conclusion — the
+curve is flat from seed five onward by every metric — but it is the reason for keeping
+ten rather than trimming to five.
