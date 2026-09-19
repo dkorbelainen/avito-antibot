@@ -31,10 +31,17 @@ def load(path=None) -> pd.DataFrame:
     return frame[list(COLUMNS)].rename(columns=COLUMNS)
 
 
-def table(names: list[str] | None = None) -> pd.DataFrame:
+def table(names: list[str] | None = None, keep: str = "first") -> pd.DataFrame:
+    """Rows in the order asked for, one per name.
+
+    An experiment name can occur more than once — the ablation baseline was rerun on a
+    later feature set, for instance — so the duplicates are collapsed. `keep="first"`
+    is what a progression wants: the run that the step originally refers to.
+    """
     frame = load()
     if names:
         frame = frame[frame["experiment"].isin(names)]
+        frame = frame.drop_duplicates(subset="experiment", keep=keep)
         frame = frame.set_index("experiment").loc[[n for n in names if n in set(frame["experiment"])]].reset_index()
     return frame.round(4)
 
