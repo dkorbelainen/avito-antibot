@@ -1,4 +1,10 @@
-"""Hyper-parameter search on PR-AUC — P@R70 is too noisy to optimise directly."""
+"""Hyper-parameter search on PR-AUC — P@R70 is too noisy to optimise directly.
+
+The budget is set by how long one trial costs, not by how many trials look thorough.
+A trial is three folds on a capped round count with a low-learning-rate floor: an
+earlier version allowed rates down to 0.015 with a 2500-round early-stopping cap and
+spent half an hour per XGBoost trial, which buys nothing the blend does not.
+"""
 
 from __future__ import annotations
 
@@ -16,7 +22,7 @@ from .pipeline import build_dataset
 
 SPACES = {
     "lgb": lambda t: {
-        "learning_rate": t.suggest_float("learning_rate", 0.015, 0.08, log=True),
+        "learning_rate": t.suggest_float("learning_rate", 0.03, 0.12, log=True),
         "num_leaves": t.suggest_int("num_leaves", 15, 96),
         "min_data_in_leaf": t.suggest_int("min_data_in_leaf", 10, 120),
         "feature_fraction": t.suggest_float("feature_fraction", 0.3, 0.95),
@@ -26,14 +32,14 @@ SPACES = {
         "min_gain_to_split": t.suggest_float("min_gain_to_split", 0.0, 1.0),
     },
     "cat": lambda t: {
-        "learning_rate": t.suggest_float("learning_rate", 0.015, 0.08, log=True),
+        "learning_rate": t.suggest_float("learning_rate", 0.03, 0.12, log=True),
         "depth": t.suggest_int("depth", 4, 8),
         "l2_leaf_reg": t.suggest_float("l2_leaf_reg", 1.0, 30.0, log=True),
         "random_strength": t.suggest_float("random_strength", 0.5, 5.0),
         "bagging_temperature": t.suggest_float("bagging_temperature", 0.0, 2.0),
     },
     "xgb": lambda t: {
-        "eta": t.suggest_float("eta", 0.015, 0.08, log=True),
+        "eta": t.suggest_float("eta", 0.03, 0.12, log=True),
         "max_depth": t.suggest_int("max_depth", 3, 9),
         "min_child_weight": t.suggest_float("min_child_weight", 1.0, 30.0, log=True),
         "subsample": t.suggest_float("subsample", 0.6, 1.0),
@@ -47,16 +53,26 @@ SPACES = {
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--kind", default="lgb", choices=list(SPACES))
-    parser.add_argument("--trials", type=int, default=60)
+    parser.add_argument("--trials", type=int, default=25)
+    parser.add_argument("--folds", type=int, default=3)
+    parser.add_argument("--max-rounds", type=int, default=900)
     args = parser.parse_args()
 
     dataset = build_dataset()
     x, y = dataset.x_train, dataset.y_train
-    folds = list(StratifiedKFold(config.N_FOLDS, shuffle=True, random_state=config.SEED).split(x, y))
+    folds = list(StratifiedKFold(args.folds, shuffle=True, random_state=config.SEED).split(x, y))
 
     def objective(trial: optuna.Trial) -> float:
         params = SPACES[args.kind](trial)
-        rounds = estimate_rounds(args.kind, x, y, folds[:2], params_override=params)
+        rounds = estimate_rounds(
+            args.kind,
+            x,
+            y,
+            folds[:1],
+            max_rounds=args.max_rounds,
+            patience=60,
+            params_override=params,
+        )
         spec = ModelSpec(kind=args.kind, n_rounds=rounds, params=params)
         oof = np.zeros(len(x))
         for train_idx, valid_idx in folds:
@@ -68,11 +84,18 @@ def main() -> None:
 
     optuna.logging.set_verbosity(optuna.logging.WARNING)
     study = optuna.create_study(
-        direction="maximize", sampler=optuna.samplers.TPESampler(seed=config.SEED)
+        direction="maximize",
+        sampler=optuna.samplers.TPESampler(seed=config.SEED),
+        pruner=optuna.pruners.MedianPruner(n_startup_trials=8),
     )
 
     def log_trial(study: optuna.Study, trial: optuna.trial.FrozenTrial) -> None:
-        print(f"trial {trial.number:3d} pr_auc {trial.value:.4f} best {study.best_value:.4f}", flush=True)
+        elapsed = (trial.datetime_complete - trial.datetime_start).total_seconds()
+        print(
+            f"trial {trial.number:3d} pr_auc {trial.value:.4f} best {study.best_value:.4f} "
+            f"rounds {trial.user_attrs['rounds']:4d} {elapsed:.0f}s",
+            flush=True,
+        )
 
     study.optimize(objective, n_trials=args.trials, show_progress_bar=False, callbacks=[log_trial])
 

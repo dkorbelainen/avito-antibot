@@ -761,12 +761,10 @@ def build_features(
         _block_navigation(events),
         _block_pointer_web(events),
         _block_pointer_deep(events),
-        _scoped_block(
-            events,
-            ("android", "ios"),
-            [_block_timing, _block_navigation, timeseries.build_block],
-            "mob_",
-        ),
+        # No mobile copy of the time-series block: a mobile-dominant cookie has
+        # essentially no non-mobile events, so the copy repeats the global column and
+        # only dilutes column sampling (PR-AUC 0.7959 with it, 0.7993 without).
+        _scoped_block(events, ("android", "ios"), [_block_timing, _block_navigation], "mob_"),
         _scoped_block(events, ("web", "desktop"), [_block_timing], "web_"),
         timeseries.build_block(events),
         _block_window_coverage(events, meta),
