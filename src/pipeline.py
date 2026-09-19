@@ -23,7 +23,7 @@ class Dataset:
     test_ids: pd.Index
 
 
-_FEATURE_SOURCES = ("features.py", "timeseries.py")
+_FEATURE_SOURCES = ("data.py", "features.py", "timeseries.py")
 
 
 def _feature_code_hash() -> str:

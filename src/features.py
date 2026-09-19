@@ -449,6 +449,81 @@ def _block_catalog_shares(
     return pd.concat(parts, axis=1)
 
 
+def _block_popularity(
+    events: pd.DataFrame, fit_ids: pd.Index | None = None
+) -> pd.DataFrame:
+    """How crowded are the listings this cookie opens?
+
+    A listing's audience is counted over the fitting cookies only, and the cookie's own
+    contribution is removed, so the number describes everyone else's interest in the
+    same listing. Collectors concentrate on listings the crowd also opens; a person
+    keeps running into listings nobody else in the window touched.
+    """
+    index = events["cookie_id"].drop_duplicates().sort_values()
+    items = events.dropna(subset=["item_id"])
+    if items.empty:
+        return pd.DataFrame(index=index)
+    fit_rows = items if fit_ids is None else items[items["cookie_id"].isin(fit_ids)]
+    views = fit_rows.groupby("item_id").size()
+    audience = fit_rows.groupby("item_id")["cookie_id"].nunique()
+
+    pairs = items.groupby(["cookie_id", "item_id"]).size().rename("own").reset_index()
+    in_fit = pairs["cookie_id"].isin(fit_rows["cookie_id"].unique()).to_numpy()
+    pairs["views_other"] = pairs["item_id"].map(views) - np.where(in_fit, pairs["own"], 0)
+    pairs["aud_other"] = pairs["item_id"].map(audience) - in_fit
+    # An item absent from the reference is unmeasured, not unpopular.
+    known = pairs.dropna(subset=["aud_other"])
+    g = known.groupby("cookie_id")
+
+    out = pd.DataFrame(index=index)
+    out["pop_aud_mean"] = np.log1p(g["aud_other"].mean())
+    out["pop_aud_med"] = np.log1p(g["aud_other"].median())
+    out["pop_aud_max"] = np.log1p(g["aud_other"].max())
+    out["pop_aud_std"] = np.log1p(g["aud_other"].std())
+    out["pop_views_mean"] = np.log1p(g["views_other"].mean())
+    out["pop_views_std"] = np.log1p(g["views_other"].std())
+    out["pop_solo_share"] = known.assign(solo=known["aud_other"] <= 0).groupby("cookie_id")["solo"].mean()
+    return out
+
+
+def _block_crowd(
+    events: pd.DataFrame, fit_ids: pd.Index | None = None
+) -> pd.DataFrame:
+    """The cookie against the crowd on the same kind of page.
+
+    Absolute dwell and absolute page depth mix the cookie's pace with what it happened
+    to look at: a listing is read for longer than a result page, and some queries are
+    normally paged deeper than others. Subtracting the population median for the same
+    event type, and for the same query, leaves the part that is the cookie's own.
+    """
+    index = events["cookie_id"].drop_duplicates().sort_values()
+    out = pd.DataFrame(index=index)
+
+    frame = events[["cookie_id", "event_name", "event_ts", "search_page", "search_query"]].copy()
+    dwell = (
+        frame.groupby("cookie_id")["event_ts"].shift(-1) - frame["event_ts"]
+    ).dt.total_seconds()
+    frame["log_dwell"] = np.log1p(dwell.clip(lower=0))
+    timed = frame.dropna(subset=["log_dwell"])
+    fit_rows = timed if fit_ids is None else timed[timed["cookie_id"].isin(fit_ids)]
+    expected = fit_rows.groupby("event_name", observed=True)["log_dwell"].median()
+    delta = timed["log_dwell"] - timed["event_name"].map(expected).astype("float64")
+    grouped = delta.groupby(timed["cookie_id"])
+    out["crowd_dwell_mean"] = grouped.mean()
+    out["crowd_dwell_std"] = grouped.std()
+    out["crowd_dwell_med"] = grouped.median()
+
+    paged = frame.dropna(subset=["search_page", "search_query"])
+    if not paged.empty:
+        fit_paged = paged if fit_ids is None else paged[paged["cookie_id"].isin(fit_ids)]
+        depth = fit_paged.groupby("search_query")["search_page"].median()
+        gap = paged["search_page"] - paged["search_query"].map(depth).astype("float64")
+        grouped = gap.groupby(paged["cookie_id"])
+        out["crowd_page_mean"] = grouped.mean()
+        out["crowd_page_max"] = grouped.max()
+    return out
+
+
 def _block_conditional_timing(events: pd.DataFrame) -> pd.DataFrame:
     """Dwell time after each event type. People linger on a listing; scrapers do not."""
     frame = events[["cookie_id", "event_name", "event_ts"]].copy()
@@ -785,6 +860,8 @@ def build_features(
         _block_id_structure(events),
         _block_dt_granularity(events),
         _block_catalog_shares(events, fit_ids),
+        _block_popularity(events, fit_ids),
+        _block_crowd(events, fit_ids),
         _block_conditional_timing(events),
         _block_navigation(events),
         _block_pointer_web(events),

@@ -35,8 +35,11 @@ def clip_to_window(events: pd.DataFrame, meta: pd.DataFrame) -> pd.DataFrame:
     """
     bounds = meta[["cookie_id", "window_start_ts", "window_end_ts"]]
     merged = events.merge(bounds, on="cookie_id", how="inner")
-    in_window = merged["event_ts"].between(
-        merged["window_start_ts"], merged["window_end_ts"]
+    # The window is half-open: the task defines it as
+    # `window_start_ts <= event_ts < window_end_ts`, and 68 rows sit exactly on the
+    # closing bound.
+    in_window = (merged["event_ts"] >= merged["window_start_ts"]) & (
+        merged["event_ts"] < merged["window_end_ts"]
     )
     kept = merged.loc[in_window].drop(columns=["window_start_ts", "window_end_ts"])
     return kept.sort_values(["cookie_id", "event_ts"], kind="mergesort").reset_index(
@@ -48,5 +51,5 @@ def assert_no_future_leak(events: pd.DataFrame, meta: pd.DataFrame) -> None:
     bounds = meta.set_index("cookie_id")
     ends = events["cookie_id"].map(bounds["window_end_ts"])
     starts = events["cookie_id"].map(bounds["window_start_ts"])
-    if (events["event_ts"] > ends).any() or (events["event_ts"] < starts).any():
+    if (events["event_ts"] >= ends).any() or (events["event_ts"] < starts).any():
         raise AssertionError("events outside the observation window reached features")
