@@ -1328,3 +1328,81 @@ The general point is the same one F50 and F58 made about caches. A number writte
 once is a number that was true once. The notebook is generated from
 `tools/make_notebook.py` precisely so the code cannot drift; the prose around the code
 has no such guard, and this is what that costs.
+
+### F67 — the hidden score, and which protocol told the truth
+The submitted vector scored **P@R70 0.87332**. The report also states what a constant
+answer would score, 0.09391, and a constant answer scores exactly the prevalence: the
+test half holds **461 bots in 4909 rows**, a bot share of 0.0939 against 0.0811 on
+train. At recall 0.70 that is 323 true positives, 47 false positives, 370 rows flagged.
+
+The richer bot share should have *helped*. Resampling the out-of-fold vector to a
+prevalence of 0.0939 lifts it from 0.8938 to 0.9079, so the like-for-like expectation
+was 0.908, not 0.894. The observed 0.8733 is 0.035 short of that. It is not sampling
+noise: 4000 draws of 4909 rows at the test prevalence centre on 0.9087 with sd 0.0122,
+and the observed value sits at the 0.35th percentile of that band.
+
+The interesting part is which internal number survived contact. Strict cut 7 read
+0.8869 and strict cut 10 read 0.8701; the observed 0.8733 lies inside that pair. The
+random five-fold out-of-fold number, 0.8938, does not — and once the prevalence
+correction is applied it is optimistic by about 0.035. F65 predicted the direction
+correctly and the magnitude poorly: it named a floor of 0.870 and a centre of
+0.885..0.895, and the result landed just above the floor.
+
+Two things were wrong at once. The random folds mix days, so a cookie is scored with
+its own day present on the other side of the split, and that is worth roughly 0.02 here.
+And the Bayes limit of F62 was estimated by calibrating the very vector it was bounding,
+which flatters it. Against that limit we sat 0.003 short in-fold and 0.037 short on the
+hidden half. The second gap is the honest one.
+
+### F68 — five levers, opened after the result and closed again
+With the true number in hand every remaining hypothesis was tested against a forward
+split rather than the random folds. None of them survived.
+
+**Covariate drift: none to find.** The vocabularies are identical in both halves — 148
+user agents and 120 search queries, with zero values unique to either side. Cookie-share
+deltas on platform, event name, item category and seller type reach at most 0.013.
+Events per cookie 17.89 against 18.27. Score quantiles agree within 0.008. Over the
+whole 479-column matrix the largest standardised mean difference is 0.124, on
+`window_dow`, and nothing else passes 0.2. The test branch of the feature build is not
+broken.
+
+**Stale training days: the slope has the wrong sign.** Holding the scored block fixed
+at days 11-13 and sliding a five-day training window backwards gives 0.8129, 0.8485,
+0.8615, 0.8626 at gaps of one, three, five and seven days — **+0.0081 per day of gap**.
+Recency weighting and refitting on the latest days are not merely unhelpful, they point
+the wrong way.
+
+**Data volume: the curve is already flat.** P@R70 against training rows reads 0.8203 at
+2218, 0.8623 at 3549, 0.8764 at 4880, 0.8797 at 6211, 0.8868 at 7542 and 0.8862 at
+8873. The local slope at the top is **-0.0004 per 1000 rows**; the climb ends near 7500.
+A pseudo-labelling rehearsal — days 0-9 labelled, days 10-13 standing in for the test
+week, no holdout label ever reaching the pseudo step — agrees: the best arm is +0.0020
+at 1/3 paired wins and the full-weight arm is -0.0082 at 0/3. There is nowhere for extra
+rows to go.
+
+**Family blending: the sign flips between cuts.** Spearman between the three families is
+0.911 to 0.953, and CatBoost and XGBoost are 0.011 to 0.015 weaker out of fold, so
+blending dilutes more than it diversifies. A 2:1:1 rank blend gained +0.0034 with 3/3
+wins at cut 10 and lost 0.0050 at cut 8. The zero weight the search gave the other two
+families was a real measurement, not an artefact.
+
+**Regularisation and pruning, on the split that matters.** Paired against the shipped
+parameters, three seeds per cut:
+
+| arm | cut 10 | cut 8 |
+|---|---|---|
+| `num_leaves` 15 | -0.0136 (0/3) | -0.0086 (0/3) |
+| `num_leaves` 15 + `min_data_in_leaf` 80 | -0.0065 (1/3) | -0.0055 (0/3) |
+| `lambda_l2` 25 | +0.0013 (1/3) | -0.0014 (1/3) |
+| `feature_fraction` 0.4 | +0.0005 (2/3) | +0.0026 (2/3) |
+| `keep_top` column subset | -0.0018 (1/3) | +0.0025 (3/3) |
+
+Cutting capacity clearly hurts. Nothing else clears its own noise: the best arm,
+`feature_fraction` 0.4, is +0.0016 over six paired runs with 4/6 wins, which a sign test
+cannot separate from chance.
+
+The conclusion is narrower than it looks. The shipped configuration wins on the strict
+protocol as well as on the random folds, so choosing on the wrong protocol cost nothing
+in the answer — it cost only in the forecast. What separates 0.8733 from 0.8938 is a
+protocol artefact plus one draw of 4909 rows, and neither is a modelling choice anyone
+can take back after the fact.
