@@ -1011,3 +1011,109 @@ never touches the ensemble module. Fixed by hashing the resolved `ModelSpec` —
 rounds and every parameter — into the cache name alongside the feature hash. The general
 rule: a cache key has to name every input that can change the array, and there are two
 of them here, not one.
+
+### F59 — the ceiling, measured from four sides
+Every direction this session closed with "no gain", which invites the question the
+experiments themselves cannot answer: how much is left to win at all, and how much of
+any win would be visible. Four measurements, all on the shipped out-of-fold vector.
+
+**1. The operating point is 75 rows wide.** At the R70 optimum the model selects 706
+cookies, 631 of them bots, and misses 268 positives. The entire distance from 0.8938 to
+a perfect 1.0000 is those 75 false positives, and each one is worth +0.00126. Five
+fewer is +0.0064; twenty fewer is +0.0261. The score bands are already sharply
+calibrated — 221 of 221 cookies above 0.98 are bots, 28 of 5615 below 0.50 are — and
+the whole contest happens between 0.85 and 0.96, where 1077 rows carry 374 positives,
+a 35% rate. An oracle that reorders just the 0.80..0.98 band, leaving the band's position in
+the global ranking untouched, reads 1.0000.
+
+**2. The errors are shared by every model.** The three families fail on the same
+cookies, and F43 measured that pairwise; the three-way view is stronger. 247 of 268
+missed positives are missed by all three, and 66 of 75 false positives are false in all
+three. Jaccard runs 0.87..0.91 on the misses and 0.74..0.83 on the false alarms. An
+oracle that picks, per row, whichever of the three families ranked that row best — full
+label knowledge, not attainable by any blend — reaches 0.9095 P@R70. Read it for what it
+is: an upper bound on *these three* out-of-fold vectors, not on the problem. In rank
+space a convex blend puts every row between the family minimum and maximum, so the
+oracle assignment dominates it pointwise and no weighting of these three can pass
+0.9095. A different model is not bounded by it. What the number says is that the
+disagreement available to blending is worth at most +0.0157 even when spent perfectly,
+and F43 already measured what it is worth when spent honestly: 0.0000.
+
+**3. The errors are not seed noise.** Five seeds, five folds each, error sets compared
+directly: 64 of the false positives are false in all five seeds, 235 of the misses are
+missed in all five, pairwise Jaccard 0.87 on both. The rank standard deviation across
+seeds is 0.0211 inside the 0.80..0.98 band against 0.0727 outside it — the boundary is
+the *most* stable part of the ranking, not the least. The model is not uncertain there.
+It is confidently wrong, which is bias, and no amount of bagging touches bias. F49 said
+the seed curve is flat past five; this says why.
+
+**4. The rows themselves carry nothing else.** Median raw profile at the operating
+point:
+
+| group | n | events | items | locations | max page | median gap | contact |
+|---|---|---|---|---|---|---|---|
+| typical human | 10126 | 12.0 | 6.0 | 4.5 | 4.0 | 59 s | 0 |
+| false positive in all 3 | 66 | 23.5 | 11.5 | 10.5 | 7.0 | 27 s | 0 |
+| bot caught | 652 | 25.0 | 12.0 | 10.0 | 8.0 | 19 s | 1 |
+| missed in all 3 | 247 | 12.0 | 6.0 | 5.0 | 4.0 | 45 s | 1 |
+
+The universally missed bots are numerically a typical human, column for column. The
+universal false positives are numerically a caught bot. No two of the 11091 feature
+vectors are identical, so there is no hard label collision to point at — the rows do
+differ, they just differ in ways that carry no label. The one visible asymmetry,
+pointer coverage 0.86 in the false positives against 0.00 in the caught bots, is worth
+a positive rate of 0.0634 against 0.0920, a factor of 1.45, and it is already spent
+across 38 pointer columns.
+
+Accuracy stratified by volume says the same from the other end: ROC-AUC is 0.7952 for
+cookies with three events or fewer, 0.9366 at 10..16, 0.9702 at 40..70 and 0.9996 above
+70. Where there is a log to read, the problem is solved. 26% of the misses live in the
+cookies with six events or fewer.
+
+### F60 — what a win would have to be worth to be visible
+The test split is 4909 rows. Resampling the training out-of-fold vector to that size,
+4000 draws: P@R70 has a standard deviation of 0.0146 and a 90% band 0.0476 wide.
+Against that, a scorer built to be worse by a known margin is ranked correctly in 81%
+of test-sized draws at a true gap of 0.0027, and 93% at 0.0084. The `goss` change is
++0.0027 on the blended vector and +0.0054 on paired seeds; it is the right call on the
+evidence and it is still close to a four-in-five bet on any single draw.
+
+Prevalence moves the metric more than any modelling decision available here. Precision
+at fixed recall is not prevalence-free, and resampling the same predictions to a
+different bot share gives:
+
+| bot share | P@R70 |
+|---|---|
+| 0.04 | 0.7976 |
+| 0.06 | 0.8588 |
+| 0.0811 (train) | 0.8938 |
+| 0.10 | 0.9140 |
+| 0.16 | 0.9488 |
+
+The slope is about 1.4 points of precision per point of prevalence. Within the training
+fortnight the daily bot share already runs 0.0629 to 0.0926, standard deviation 0.0088,
+which on its own is worth 0.012 of P@R70. Per-day P@R70 spreads 0.7800..0.9796.
+
+Two consequences, and they point in opposite directions. The absolute number that comes
+back from the test week is largely a property of that week and should not be read as a
+verdict on the model. The *ranking* against other submissions is not affected by any of
+this, because everyone is scored on the same fixed draw at the same prevalence — which
+is exactly why a change worth less than the seed spread is still worth making when the
+paired evidence says it is positive, and why nothing was ever accepted here on an
+unpaired reading.
+
+### F61 — the search space still described the old sampler
+`src/tune.py` suggested `bagging_fraction` for LightGBM. Under `boosting: goss` that
+parameter is ignored, so one of the eight dimensions was pure noise: the sampler drew
+it, the trial paid for it, and the result carried a value that could never have had an
+effect. Replaced with the knobs `goss` actually reads, `top_rate` and `other_rate`,
+with `other_rate` drawn from the room `top_rate` leaves so their sum stays below one.
+The module remains measured-and-rejected (F19, F44) and unused by the shipped run; the
+point is that a rejected search should have been rejecting the right space.
+
+One reading note for all three entries. Every number above comes from the training
+out-of-fold vector, which is the same data every acceptance decision was made on.
+Descriptions of where the errors sit are safe to take from it; *decisions* are not,
+because a fix aimed at 75 named cookies is fitted to them by construction. Nothing in
+F59 or F60 changed the model, and that is deliberate — the study exists to say when to
+stop, not to suggest where to push.
