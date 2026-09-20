@@ -1235,3 +1235,96 @@ carries variance that is not about information at all. The three-seed spread is 
 0.004, and -0.0054 is one of those. The honest statement is that no effect was detected
 and the point estimate is negative — which is F45 and experiment 7a again, now under
 `goss`. Ten seeds were not spent proving a negative that would not be acted on.
+
+### F65 — what the test vector itself says, and what the search cost
+Sixty experiments were accepted or rejected against one out-of-fold vector. That is
+selection on the validation set, and 0.8938 is the maximum of a search, so it is biased
+upward by construction. The question is by how much, and the answer has to come from
+outside that vector.
+
+**The geometry.** Train covers 6–19 April, fourteen one-day windows, 11091 cookies. Test
+covers 20–26 April, seven days, 4909 cookies. They do not overlap and the test is
+strictly later, so the hidden score is an out-of-time reading. `src/strict.py` simulates
+exactly that and does it under harder conditions than the real one: cut 7 trains on seven
+days rather than fourteen and reads 0.8869; cut 10 trains on ten and scores four, reading
+0.8701. Both are floors, not forecasts.
+
+**Did the accepted steps replicate?** Selection bias shows up as an out-of-fold gain that
+does not appear anywhere else. The two large accepted steps appear everywhere, and larger
+on the stricter protocol:
+
+| step | Δ out-of-fold | Δ forward-chain | Δ strict cut 7 |
+|---|---|---|---|
+| + popularity and crowd | +0.0860 | +0.1096 | +0.1437 |
+| + `goss` | +0.0043 | +0.0121 | +0.0042 |
+
+One counter-example belongs here for balance: fitting the vocabularies on train only
+raised the out-of-fold reading from 0.7850 to 0.7936 while forward-chaining fell from
+0.7705 to 0.7575. That step was taken to close a leak, not to move the metric, but it is
+the one place in the line where the two protocols disagree in sign.
+
+**What the submission vector looks like.** The scored test predictions against the
+training out-of-fold predictions, same model, same code:
+
+| quantile | train OOF | test submission |
+|---|---|---|
+| 0.10 | 0.1188 | 0.1080 |
+| 0.50 | 0.4934 | 0.5015 |
+| 0.90 | 0.8929 | 0.8988 |
+| 0.99 | 0.9893 | 0.9895 |
+
+The share sitting above the training operating threshold is 0.0637 on train and 0.0646
+on test. Mapping the test scores through the isotonic fit of F62 and summing gives 410
+expected bots in 4909 rows, an implied share of **0.0835** against 0.0811 on train; the
+same map sums to 897 on train against 899 actual, so the map itself is sound. By the F60
+slope a share of 0.0835 is worth about 0.8969 rather than 0.8938 — a difference that
+favours us and is smaller than the noise anyway.
+
+That estimate is made by the model being judged, so it is not independent. What is
+independent is F30: adversarial validation of train against test over every column gives
+AUC 0.5241, with no single column past 0.60. Nothing about the test week looks different.
+
+**The honest expectation.** The floor is the strict protocol under less training data,
+0.870. The centre is 0.885..0.895. The optimistic end, with fourteen days of training and
+the slightly richer bot share, is around 0.900. Sampling noise of 0.0146 sits on top of
+all three and is common to every submission. The one prediction worth committing to is
+directional: the hidden score should read *below* the out-of-fold 0.8938, because the
+out-of-fold number is the maximum of a search and nothing can take that back.
+
+### F66 — four stale numbers in the notebook, and the one that mattered
+The notebook is the deliverable, so its prose was re-derived against the data rather
+than re-read. Four claims did not survive.
+
+**`captcha_shown` was described as unusable.** The rejected-hypotheses table said it
+"occurs for 0.2% of bots and 0% of humans, nothing to work with". Neither figure is
+reproducible under any reading. In the clipped log the event does not exist at all —
+zero rows of 288126, because all 7928 of them are timestamped after `window_end_ts`. In
+the raw log the flag covers 49.1% of bots and 1.3% of humans. The row now says what F63
+measured: it is the dataset's bait, not a weak feature.
+
+**The popularity mechanism carried three numbers from an earlier pool.** Recomputed on
+the shipped clipping and a distinct cookie-item pair table: the mean bot share of the
+audience on bot-touched listings is 0.413, not 0.51; a listing with an audience of
+exactly one cookie belongs to 47.9% of humans and 28.7% of bots, against "38% and 14%";
+and the median audience of a listing a cookie opened is 3 for humans and 6 for bots. The
+counts either side of them — 899 bots over 6957 listings, 10192 humans over 45538 — do
+reproduce, as does the cursor reading of 66.2% against 33.0% fill on web and desktop.
+
+**The block count disagreed with its own table.** The heading said 18, the table listed
+19 rows, and `src/ablation.py` splits the matrix into 22 families. The three missing
+rows — cookie meta, window coverage, the platform-scoped copies — are now in the table
+and the heading says 22.
+
+**Training was described as one week.** It is fourteen one-day windows, 6 to 19 April,
+with the test on the following seven days. The header of the same notebook always said
+so.
+
+Two additions rather than corrections: section 2 now states what the window filter is
+worth (F63's 0.8987 against 0.2967), and the limitations open with the Bayes reading of
+F62 instead of leaving the reader to assume there is room left. The noise bullet now
+carries F60's measured 0.0146 rather than an eyeballed "about 0.01".
+
+The general point is the same one F50 and F58 made about caches. A number written down
+once is a number that was true once. The notebook is generated from
+`tools/make_notebook.py` precisely so the code cannot drift; the prose around the code
+has no such guard, and this is what that costs.
