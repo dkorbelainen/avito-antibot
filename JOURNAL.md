@@ -1117,3 +1117,121 @@ Descriptions of where the errors sit are safe to take from it; *decisions* are n
 because a fix aimed at 75 named cookies is fitted to them by construction. Nothing in
 F59 or F60 changed the model, and that is deliberate — the study exists to say when to
 stop, not to suggest where to push.
+
+### F62 — the Bayes limit of this feature set is 0.8966
+F59 and F60 bounded the error set and the noise. Neither answers the question directly:
+what would a perfect ranker score on these columns? It can be read off the model, on one
+condition — that the predicted number is the true posterior, because ranking by the true
+posterior is Bayes-optimal and the achievable precision is then a property of the
+probabilities rather than of any classifier.
+
+So the condition was checked first. Five seeds of raw LightGBM output, isotonic
+regression cross-fitted over the five folds so no row calibrates itself:
+
+| predicted | actual | n |
+|---|---|---|
+| 0.0014 | 0.0028 | 1065 |
+| 0.0299 | 0.0280 | 965 |
+| 0.0925 | 0.0928 | 862 |
+| 0.7842 | 0.7802 | 919 |
+
+Mean absolute gap across twelve bins, 0.0024. The posterior is honest.
+
+Reading the metric off it: selecting rows by posterior until the expected recall reaches
+0.70 takes 701 cookies and an expected precision of **0.8966**. The shipped vector reads
+0.8938. The gap is 0.003, which is a fifth of the test-size standard deviation in F60.
+
+Two things this does not say. It is the limit *of this representation*, not of the
+problem: a column carrying something the 479 do not would move the posterior and the
+bound with it. And it is measured with the same model whose ranking it judges, so a
+region of systematic overconfidence would inflate it — the calibration table is what
+bounds that, not an argument.
+
+What supports it from the other side is F59's fourth panel and the null results of F53,
+F54 and F56: the rows the model gets wrong match the opposite class column for column,
+and five independent re-encodings of the same fourteen raw fields each score 0.76..0.86
+alone and add nothing. Half the positives, 450 of 899, sit at a posterior between 0.1
+and 0.9, and the calibration holds there too — 452 expected against 450 observed. They
+are not badly described. They are genuinely ambiguous.
+
+One aside with a practical edge: the isotonic fit *lowers* P@R70, 0.8926 to 0.8861,
+although a monotone map cannot reorder anything. It maps to a step function, steps are
+ties, and the metric resolves ties as one group. Calibration can only cost this metric
+resolution. F48 rejected per-cell calibration on the numbers; this is the mechanism.
+
+### F63 — the trap in this dataset is `captcha_shown`, and it is worth 0.60
+`data.clip_to_window` has been the single choke point since F1, justified as hygiene.
+It is worth more than that.
+
+All 7928 `captcha_shown` events in the raw log lie outside the observation window. Not
+most — all of them; the clipped log contains nine event names, not ten. On the raw log
+the flag is the strongest simple feature in the dataset:
+
+| train cookies | n | bot rate |
+|---|---|---|
+| no captcha | 10519 | 0.0435 |
+| captcha seen | 572 | **0.7710** |
+
+AUC 0.7388 from one boolean. Test cookies carrying a captcha event: **zero**. In fact
+test cookies have no out-of-window rows at all — 0 of 89690, against 40779 of 239215 on
+the train side, affecting 48% of training cookies. The out-of-window rows inflate a
+bot's event count by a median factor of 2.0 and a human's by 1.0, so *how much the
+window removed* is itself a near-perfect label, and it is unobservable at scoring time.
+
+What that costs a submission that never reads the window columns, measured with 25 plain
+aggregates:
+
+| arm | P@R70 |
+|---|---|
+| clipped on both sides | 0.4555 |
+| train unclipped, scored clipped | **0.2967** |
+| what the careless arm sees in its own CV | **0.8987** |
+
+Twenty-five crude columns and an out-of-window log read 0.8987 in cross-validation —
+above this project's real 0.8938 — and 0.2967 for real. The gap is not a subtlety to be
+tidied up at the end. It is most of the score.
+
+### F64 — the last sweep of the raw log, and the column set will not be trimmed either
+Two tracks, both closed, three paired seeds each.
+
+**Twenty-five new columns from whatever the blocks had not touched.** User agents counted
+in cookies rather than rows; query text length, digit share, repetition and popularity;
+pointer coordinates against a pixel grid; periodicity and longest repeated run of the
+event stream; second-level collisions with other cookies; item revisits and repeated id
+steps. Best standalone AUC 0.7044 (`q_repeat_rate`), which is `search_query_uniq_ratio`
+written the other way round. Increment to the 479: **-0.0020 P@R70 (1/3), -0.0008 PR-AUC
+(1/3)**. Rejected.
+
+The cardinalities say why the well is dry: 120 distinct search queries across 328905
+events, 148 user-agent strings across 16000 cookies, timestamps with no sub-second part,
+and `eid` a one-to-one synonym of `event_name` — a cross-tabulation of the two is a
+permutation matrix, so the column carries exactly nothing.
+
+**Trimming.** 19 columns are never split on, 86 carry under 0.01% of total gain, 304
+under 0.1%, and 175 of 479 hold 90% of it. Eight pairs correlate above 0.999, four of
+them algebraic identities: `window_coverage` is `span_h` over 24, `ptrd_bbox_fill` is
+`ptr_bbox` over a constant, `ptrd_repeat_share` is one minus `ptr_uniq_share`,
+`ptrd_step_q50` is `ptr_step_med`. A fifth is a design flaw worth naming: `_block_crowd`
+subtracts the per-query median page depth, but all 120 queries have a median depth of
+exactly 2.0, so `crowd_page_mean` is `page_mean` shifted by a constant and the
+population correction does nothing at all.
+
+| arm | columns | P@R70 | PR-AUC |
+|---|---|---|---|
+| drop the 8 duplicates | 471 | -0.0054 (0/3) | -0.0020 (0/3) |
+| drop duplicates and dead | 452 | -0.0027 (1/3) | -0.0016 (1/3) |
+| in-fold top 350 by gain | 350 | +0.0002 (1/3) | -0.0003 (2/3) |
+| in-fold top 250 | 250 | -0.0047 (0/3) | -0.0014 (1/3) |
+| in-fold top 175 | 175 | -0.0053 (0/3) | -0.0024 (0/3) |
+
+Nothing wins, and removing provable duplicates is the worst arm of the five. The
+mechanism is `feature_fraction`: at 0.7 a lone column reaches a split with probability
+0.7 and a duplicated pair with 0.91, so duplication acts as an implicit importance
+prior. Deleting the copy demotes a statistic the set was emphasising.
+
+Read the size of these deltas rather than their sign. Dropping columns also shifts the
+column-sampling RNG stream, so each arm draws different subsets at every split and
+carries variance that is not about information at all. The three-seed spread is about
+0.004, and -0.0054 is one of those. The honest statement is that no effect was detected
+and the point estimate is negative — which is F45 and experiment 7a again, now under
+`goss`. Ten seeds were not spent proving a negative that would not be acted on.
