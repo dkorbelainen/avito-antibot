@@ -20,17 +20,27 @@ from . import config
 from .model import ModelSpec, estimate_rounds, fit_predict
 from .pipeline import build_dataset
 
-SPACES = {
-    "lgb": lambda t: {
+
+def _lgb_space(t: optuna.Trial) -> dict[str, object]:
+    # The defaults use `boosting: goss`, which ignores `bagging_fraction` entirely.
+    # Its row-sampling knobs are `top_rate` and `other_rate`, and LightGBM requires
+    # their sum to stay below one, so `other_rate` is drawn from the remaining room.
+    top_rate = t.suggest_float("top_rate", 0.05, 0.5)
+    return {
         "learning_rate": t.suggest_float("learning_rate", 0.03, 0.12, log=True),
         "num_leaves": t.suggest_int("num_leaves", 15, 96),
         "min_data_in_leaf": t.suggest_int("min_data_in_leaf", 10, 120),
         "feature_fraction": t.suggest_float("feature_fraction", 0.3, 0.95),
-        "bagging_fraction": t.suggest_float("bagging_fraction", 0.6, 1.0),
+        "top_rate": top_rate,
+        "other_rate": t.suggest_float("other_rate", 0.02, 0.9 - top_rate),
         "lambda_l1": t.suggest_float("lambda_l1", 1e-3, 10.0, log=True),
         "lambda_l2": t.suggest_float("lambda_l2", 1e-2, 50.0, log=True),
         "min_gain_to_split": t.suggest_float("min_gain_to_split", 0.0, 1.0),
-    },
+    }
+
+
+SPACES = {
+    "lgb": _lgb_space,
     "cat": lambda t: {
         "learning_rate": t.suggest_float("learning_rate", 0.03, 0.12, log=True),
         "depth": t.suggest_int("depth", 4, 8),
