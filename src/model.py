@@ -18,8 +18,12 @@ LGB_PARAMS: dict[str, object] = {
     "num_leaves": 31,
     "min_data_in_leaf": 40,
     "feature_fraction": 0.7,
-    "bagging_fraction": 0.8,
-    "bagging_freq": 1,
+    # Gradient-based one-side sampling: every large-gradient row is kept at each split
+    # and the rest is subsampled. With 8% positives those rows are the boundary the
+    # metric is read at, which is why it lifts P@R70 by 0.0054 over ten paired seeds
+    # (10/10) and PR-AUC by 0.0018 (9/10) while ROC-AUC stays put. It replaces row
+    # bagging, so `bagging_fraction` and `bagging_freq` are gone with it.
+    "boosting": "goss",
     "lambda_l2": 5.0,
     # Positives are 8% of the rows; rebalancing the leaf statistics lifted PR-AUC from
     # 0.7972 to 0.7991 and recall at 1% FPR from 0.6345 to 0.6407.
