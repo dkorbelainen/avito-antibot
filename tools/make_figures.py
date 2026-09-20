@@ -1,7 +1,7 @@
 """Render the figures the README embeds.
 
 Reads the shipped out-of-fold scores from `artifacts/`, so it does not retrain
-anything; run `python -m src.submit --name final_pct` first if the file is missing.
+anything; run `python -m src.submit --name final_goss` first if the file is missing.
 """
 
 from __future__ import annotations
@@ -17,7 +17,7 @@ from src import config, plots, report
 from src.pipeline import build_dataset
 
 ASSETS = config.ROOT / "assets"
-OOF_PATH = config.CACHE_DIR / "oof_final_pct.npy"
+OOF_PATH = config.CACHE_DIR / "oof_final_goss.npy"
 
 TRACK = {
     "B0_baseline_simple": "baseline, 47",
@@ -27,6 +27,7 @@ TRACK = {
     "A12_core": "+ временной ряд, 457",
     "A15_ua_clients": "+ User-Agent, 468",
     "P7_pop_pct": "+ популярность, 479",
+    "final_goss": "+ goss, 479",
 }
 
 

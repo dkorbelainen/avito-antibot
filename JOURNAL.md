@@ -43,7 +43,11 @@ Metric: `P@R70` from the official `metric.py`. Validation: RepeatedStratifiedKFo
 | 24 | **popularity as a percentile inside one symmetric pool** | 479 | **0.8894** | 0.9510 | **0.8363** | accepted, fc 0.8836, strict 0.8827, F40 |
 | 25 | coordinate sweep around the defaults on the 479-column set, ten points | 479 | 0.8890 | 0.9510 | 0.8366 | defaults kept, F44 |
 | 26 | 900 and 1200 rounds, `extra_trees`, `path_smooth` | 479 | 0.8903 best | 0.9503 | 0.8371 best | rejected, gain below seed noise, F51 |
-| **final** | **LightGBM, defaults, bagged over 10 seeds** | 479 | **0.8894** (0.8911 rank-blended) | **0.9510** | **0.8363** | shipped, fc 0.8836, md5 `ffb2ec0bfa42d1c1256bdcb5d149132a` |
+| 27 | co-visitation graph block: neighbourhood degree, shared-listing weight, Jaccard, pool percentiles | 490 | 0.8906 | 0.9504 | 0.8351 | rejected, PR delta +0.0000 over 10 paired seeds, F53 |
+| 28 | event-level likelihood ratio over 18 channels, references refitted per fold | 555 | 0.8897 | 0.9521 | 0.8362 | rejected, single best column reaches AUC 0.860 and the set gains nothing, F54 |
+| 29 | popularity pool counted on the unclipped event log | 479 | 0.8874 | 0.9563 | 0.8481 | rejected, the gain is borrowed future, F55 |
+| 30 | **`boosting: goss` in place of row bagging** | 479 | **0.8934** | 0.9507 | **0.8368** | accepted, P@R70 +0.0054 over 10 paired seeds (10/10), F52 |
+| **final** | **LightGBM, `goss`, bagged over 10 seeds** | 479 | **0.8937** (0.8938 rank-blended) | **0.9508** | **0.8380** | shipped, fc 0.8957, md5 `aa3cf43cecfcc060128be4769c0c40b9` |
 
 ## Findings
 
@@ -336,9 +340,10 @@ actually made beat sixty Optuna trials measured on a cheap surrogate.
 
 ### Reproducibility check
 Three independent runs write `submission.csv` with md5
-`8c043f2e2ed5219ca600240ce99e6c47`: `python -m src.submit --name final`, the same
-command again with `artifacts/` emptied so every feature is rebuilt from the raw event
-log, and `jupyter nbconvert --execute --inplace solution.ipynb`. The cold run is the one
+`aa3cf43cecfcc060128be4769c0c40b9`: `python -m src.submit --name final_goss`, the same
+command with `artifacts/` emptied so every feature is rebuilt from the raw event log,
+and `jupyter nbconvert --execute --inplace solution.ipynb` from the same empty cache.
+The rebuilt feature matrix is byte-identical to the cached one. The cold run is the one
 that matters — it is the reviewer's situation, and it reproduces the submitted file
 rather than a file that happens to look like it.
 
@@ -638,10 +643,11 @@ and a single split cannot settle a 0.005 difference.
 | vocabularies fitted on train only | 423 | 0.7936 | 0.9416 | 0.7972 | 0.7575 | — |
 | + time series, class rebalancing | 457 | 0.7917 | 0.9422 | 0.7993 | 0.7692 | — |
 | + User-Agent client split | 468 | 0.8034 | 0.9426 | 0.8018 | 0.7740 | 0.7390 |
-| **+ popularity and crowd-relative blocks** | **479** | **0.8894** | **0.9510** | **0.8363** | **0.8836** | **0.8827** |
-| shipped, bagged over 10 seeds | 479 | 0.8911 | — | — | — | — |
+| + popularity and crowd-relative blocks | 479 | 0.8894 | 0.9510 | 0.8363 | 0.8836 | 0.8827 |
+| **+ `goss` sampling** | **479** | **0.8937** | **0.9508** | **0.8380** | **0.8957** | **0.8869** |
+| shipped, bagged over 10 seeds | 479 | 0.8938 | — | — | — | — |
 
-`submission.csv` md5 `ffb2ec0bfa42d1c1256bdcb5d149132a`.
+`submission.csv` md5 `aa3cf43cecfcc060128be4769c0c40b9`.
 
 
 ### F42 — what can still be said about the hidden test, without its labels
@@ -817,3 +823,191 @@ P@R70 0.8890 / PR-AUC 0.8366:
 The best PR-AUC move is +0.0005 with a seed spread of ±0.002 to ±0.005, and ROC-AUC
 goes down in both longer runs. The gate rejects it by the same rule that rejected
 feature blocks: a gain smaller than the seed spread is not a gain. Defaults stand.
+
+## Session 3 — the feature axis is closed, the sampling axis was not
+
+### F52 — gradient-based one-side sampling is worth more than any feature tried this session
+`boosting: goss` keeps every large-gradient row at each split and subsamples the rest,
+replacing the 0.8 row bagging. With 8% positives the large-gradient rows are the
+boundary the metric is read at, which is exactly the region P@R70 lives in.
+
+Paired over ten seeds on identical folds, 479 columns, rounds re-estimated by early
+stopping for each arm (601 for the defaults, 549 for `goss`):
+
+| metric | delta | standard error | seeds won |
+|---|---|---|---|
+| P@R70 | **+0.0054** | 0.0007 | 10/10 |
+| PR-AUC | **+0.0018** | 0.0005 | 9/10 |
+| R@FPR1% | +0.0059 | 0.0019 | 7/10 |
+| ROC-AUC | -0.0002 | 0.0002 | 4/10 |
+
+The other two protocols agree. Forward chaining 0.8873 to 0.8976 P@R70. Strict rebuild
+0.8827 to 0.8869 at cut 7 and 0.8587 to 0.8701 at cut 10, with PR-AUC flat there
+(+0.0002, +0.0007). Bootstrapped at the size of the test split the gain is +0.0033 with
+P(better) 0.746 — inside sampling noise as a single draw, which is true of every gain
+this problem has left, and positive on every repeated measurement.
+
+Shipped, five folds by five seeds: P@R70 0.8937 ±0.0025 against 0.8894, rank-blended
+0.8938 against 0.8911, PR-AUC 0.8380 against 0.8363, R@FPR1% 0.7408 against 0.7359,
+forward chaining 0.8957 against 0.8836, ROC-AUC 0.9508 against 0.9510. False positives
+at the operating point 76 against 80.
+
+F26, F44 and F51 all reported that every single-parameter move from the defaults loses.
+They were sweeps of the *tree* parameters. The sampling scheme was never in any of them.
+
+F49's seed curve was re-measured under the new sampling, twenty independent out-of-fold
+runs blended cumulatively in rank space: P@R70 0.8914 / 0.8917 / 0.8938 / 0.8928 /
+0.8962 and PR-AUC 0.8383 / 0.8413 / 0.8419 / 0.8416 / 0.8410 at one, two, five, ten and
+twenty seeds, with single seeds spread 0.8838..0.8973 P@R70 and 0.8311..0.8388 PR-AUC.
+The shape is the one F49 described — flat from the second seed by PR-AUC — so `BAG_SEEDS`
+stays at 10.
+
+### F53 — the co-visitation graph is the popularity block said twice
+`_block_popularity` describes the listings a cookie opens; the natural next question is
+who it meets there. Eleven columns: neighbourhood degree, shared-listing weight
+(max/mean/sum), degree per listing, neighbour repeat rate, Jaccard max and mean, and
+scale-free percentile twins inside the pool. Neighbours are cookies that opened the same
+listing; the graph is dense enough to stand on — mean listing audience 2.83, 90.9% of
+(cookie, listing) pairs sit on a shared listing, 15633 of 15762 cookies have a
+neighbour.
+
+Univariately it is the second strongest family ever measured here: `cv_repeat` 0.802,
+`cv_deg_per_item` 0.798, `cv_shared_mean` 0.784, against 0.777 for the popularity block.
+Train and test are indistinguishable on it — every column shifts by at most 0.028
+standard deviations, no NaN rate moves at all, adversarial validation over all 490
+columns reads 0.5138.
+
+In the model it is nothing. Paired over ten seeds on top of the accepted `goss` model:
+
+| metric | delta | standard error | seeds won |
+|---|---|---|---|
+| PR-AUC | +0.0005 | 0.0004 | 6/10 |
+| P@R70 | -0.0001 | 0.0007 | 5/10 |
+| R@FPR1% | +0.0056 | 0.0026 | 9/10 |
+| ROC-AUC | +0.0000 | 0.0002 | 3/10 |
+
+At three and five seeds it looked like an accept — strict rebuild +0.0042 PR-AUC at
+cut 7 and +0.0051 at cut 10, R@FPR1% up on every arm, false positives 75 to 73. Ten
+paired seeds and a bootstrap at test size close it: P(better) 0.543, a coin flip. The
+lesson of F41 repeats — a single temporal split cannot settle a 0.005 difference, and
+neither can five seeds.
+
+Two supervised variants of the same axis were measured and are out for the same reason:
+the co-viewer positive rate propagated through the listing graph (out-of-fold AUC 0.805
+on its own, +0.0019 PR-AUC in the model, and inconsistent under the strict protocol:
++0.0028 P@R70 at cut 7, -0.0063 at cut 10), and neighbour-aggregated features and model
+scores (AUC 0.79 and 0.78, no increment).
+
+### F54 — the strongest single column ever measured here adds nothing
+Every block in the set summarises a cookie with moments, quantiles or entropies. None of
+them reads the *shape* of the cookie's own event distribution against the two
+class-conditional references. This block does: eighteen channels — inter-event gap,
+pointer coordinates and step, search page, minute, item id digits, event name, platform,
+category, location, query, seller type, hour, plus the pairs (event name × gap),
+(platform × gap), (event name × page) — each binned into 24 quantiles, each bin carrying
+log P(bin | bot) - log P(bin | human) estimated on the fitting cookies only. Every event
+gets a score; the cookie keeps the mean, standard deviation, extremes and quantiles of
+its own distribution of them.
+
+Out of fold, `llr_total_mean` reaches **ROC-AUC 0.8603**. The previous record for a
+single column was 0.777 (F32). `llr_event_name_x_logdt_mean` reaches 0.804.
+
+Added to the set, with the references refitted inside every fold and the training rows
+encoded through a nested inner split so both sides carry the same noise: PR-AUC 0.8362
+against 0.8366 for the same model without it. Zero. The plain (non-nested) variant is
+worse, 0.8351.
+
+This is the clearest statement of where the problem stands. A naive-Bayes compression of
+the raw fields is a near-perfect predictor on its own and is entirely inside what the
+trees already extract from those same fields. The model is limited by the information in
+the event log, not by how that information is presented to it. Five independent
+re-encodings were measured this session — the graph (AUC 0.80), label propagation
+(0.80), neighbour aggregation (0.79), query coherence (0.76), this block (0.86) — and
+every one of them landed inside the existing 479 columns.
+
+### F55 — the unclipped pool is borrowed future, and the obvious probe for it is broken
+F1 drops the 12.4% of rows timestamped after their own cookie's window end. As a
+contribution to *another* listing's audience those rows are a population statistic, which
+is the class F39 already admits. Counting them lifts PR-AUC from 0.8401 to 0.8528 and
+ROC-AUC from 0.9526 to 0.9565 under the ordinary protocol — five times any other move
+measured this session.
+
+The first probe said leakage and was wrong on its own terms: truncating the reference
+pool to the events before the cut removes the scored cookies' own events from the pool,
+so the statistic is undefined for exactly the rows being scored. The shipped popularity
+block loses 0.006 PR-AUC under that truncation too. A probe that breaks the control arm
+cannot judge the treatment.
+
+The valid probe keeps every cookie in the pool and varies only which rows the pool
+counts. **A** clipped everywhere. **B** clipped, plus the post-window rows of cookies
+whose window closes before the cut — those rows are unambiguously past for the scored
+period. **C** unclipped everywhere, which also counts the scored cookies' own future.
+
+| arm | cut 7 P@R70 / PR | cut 10 P@R70 / PR |
+|---|---|---|
+| A clipped | 0.8969 / 0.8429 | 0.8764 / 0.8385 |
+| B + past post-window rows | 0.8889 / **0.8301** | 0.8525 / **0.8276** |
+| C unclipped | 0.9025 / 0.8546 | 0.8619 / 0.8550 |
+
+B is the honest version of C and it is the worst arm on both cuts, -0.0128 and -0.0109
+PR-AUC. The extra observations carry nothing; everything C gains is the scored period's
+own future. Rejected. The post-window rows stay out, which is what F1 said in the first
+place.
+
+### F56 — five more directions measured and closed
+* **Blending with a non-tree family.** F23 and F43 settled the three boosting libraries;
+  they are the same inductive bias. ExtraTrees (PR-AUC 0.8082), RandomForest (0.7994), an
+  MLP on quantile-transformed columns (0.7478) and regularised logistic regression
+  (0.7303) are not. Rank-correlation with LightGBM 0.83, 0.84, 0.66, 0.76 — genuinely
+  decorrelated, and every blend loses: the best, 3:1 with RandomForest, reads 0.8881
+  P@R70 and 0.8354 PR-AUC against 0.8911 and 0.8404.
+* **Two-stage re-ranking.** The metric is decided among the top 15% of the ranking, so a
+  second model was fitted on the top-K candidates alone, where positives run 28% to 52%
+  instead of 8%. K=1500 collapses (P@R70 0.1807 at full weight, because forcing the
+  candidate set above everything else truncates the recall the metric needs); K=2200 and
+  K=3000 buy at most +0.0038 P@R70 for -0.03 PR-AUC. The boundary is not
+  under-modelled, it is genuinely overlapping.
+* **Parameter-diverse bagging.** Twelve points around the defaults, rank-averaged
+  together: 0.8889 P@R70 and 0.8402 PR-AUC against 0.8898 and 0.8401 for the defaults
+  alone. The points are too correlated to average anything away, exactly as the model
+  families were. Only one point of the twelve survived on its own, and that is F52.
+* **Query coherence.** Population P(category | query) and P(location | query) carried
+  forward from the last search, scored per item view: best column `coh_cat_lift` 0.624,
+  and `coh_item_q_nuniq` 0.764, which is the popularity block again.
+* **Cookie birth cohort.** Other cookies created within 1 s to 24 h, and the gap to the
+  nearest neighbouring creation: best 0.631 at the 24 h window, which is `cookie_age_days`
+  restated.
+
+### F57 — the gate is already measuring the right thing
+The metric lives at one point of the curve — 630 true positives against 78 false ones —
+while the gate reads PR-AUC over the whole of it. That mismatch is worth testing rather
+than assuming, so the surrogates were scored against each other: split the training
+cookies in half 60 times, measure each surrogate on half A and P@R70 on half B, and ask
+which surrogate's ranking of 32 models agrees with the held-out metric.
+
+| surrogate | mean rank agreement |
+|---|---|
+| **PR-AUC** | **+0.547** |
+| recall at FPR 2% | +0.514 |
+| partial PR-AUC, recall 0.60..0.80 | +0.521 |
+| recall at FPR 1% | +0.500 |
+| P@R70 itself | +0.465 |
+| recall at FPR 0.5% | +0.434 |
+| ROC-AUC | +0.384 |
+
+PR-AUC wins, and the target metric measured on held-out data predicts itself worse than
+PR-AUC does. Restricting the integral to the region the metric reads does not help. The
+gate stays as it is.
+
+### F58 — the ensemble cache repeated F50 from the other side
+F50 put the feature-code hash in the out-of-fold cache name because the column count
+alone was not a safe key. The name still did not mention the model. Switching the
+sampling scheme changed neither the features nor the width, so `src/ensemble.py` served
+the arrays fitted under row bagging and the notebook printed the previous model's
+comparison — lgb 0.8911 P@R70 / 0.8404 PR-AUC against 0.8938 / 0.8419 for the real one.
+
+Reach: the family comparison in the notebook for one run. Not `submission.csv`, which
+never touches the ensemble module. Fixed by hashing the resolved `ModelSpec` — kind,
+rounds and every parameter — into the cache name alongside the feature hash. The general
+rule: a cache key has to name every input that can change the array, and there are two
+of them here, not one.
