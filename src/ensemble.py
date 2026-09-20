@@ -9,6 +9,7 @@ the metric pair.
 from __future__ import annotations
 
 import argparse
+import hashlib
 import itertools
 import json
 
@@ -21,6 +22,17 @@ from .model import Kind, ModelSpec, estimate_rounds, rank_average
 from .pipeline import build_dataset, feature_code_hash
 
 KINDS: tuple[Kind, ...] = ("lgb", "cat", "xgb")
+
+
+def spec_hash(spec: ModelSpec) -> str:
+    """Cache key for the fitted model itself, so a parameter change cannot be served
+    an array produced under the previous parameters (F50)."""
+    payload = json.dumps(
+        {"kind": spec.kind, "rounds": spec.n_rounds, "params": spec.resolved(config.SEED)},
+        sort_keys=True,
+        default=str,
+    )
+    return hashlib.sha256(payload.encode()).hexdigest()[:8]
 
 
 def load_spec(kind: Kind, x: pd.DataFrame, y: pd.Series, folds: list, tuned: bool) -> ModelSpec:
@@ -66,11 +78,13 @@ def family_oof(
     for kind in kinds:
         spec = load_spec(kind, x, y, folds, tuned)
         specs[kind] = spec
-        # The column count is not a safe cache key on its own: a feature block can be
-        # rewritten without changing the width, and a stale array then looks valid.
+        # Neither the column count nor the feature hash is a safe cache key on its own:
+        # a feature block can be rewritten without changing the width, and the model
+        # parameters can change without touching a feature at all. Both go in the name.
         cache = (
             config.CACHE_DIR
-            / f"oof_{kind}_{tag}_{seeds}seeds_{x.shape[1]}f_{feature_code_hash()}.npy"
+            / f"oof_{kind}_{tag}_{seeds}seeds_{x.shape[1]}f"
+            f"_{feature_code_hash()}_{spec_hash(spec)}.npy"
         )
         if cache.exists() and not refresh:
             oof[kind] = np.load(cache)
